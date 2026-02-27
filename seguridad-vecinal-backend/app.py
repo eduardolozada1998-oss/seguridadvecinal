@@ -12,6 +12,8 @@ RAM estimada en runtime:
 
 import os
 import re
+import json
+import base64
 import shutil
 import time
 import threading
@@ -20,6 +22,7 @@ import email
 import email.header
 import smtplib
 import urllib.request
+import urllib.error
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -43,6 +46,9 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GMAIL_USER   = os.environ.get("GMAIL_USER", "")
 GMAIL_PASS   = os.environ.get("GMAIL_PASS", "")
 EMAIL_ALERTA = os.environ.get("EMAIL_ALERTA", GMAIL_USER)
+
+# HuggingFace Space de reconocimiento facial (vacío = desactivado)
+HF_SPACE_URL = os.environ.get("HF_SPACE_URL", "").rstrip("/")
 
 # Ruta del binario tesseract — auto-detecta si no está en la variable de entorno
 _tess_env = os.environ.get("TESSERACT_CMD", "")
@@ -324,6 +330,47 @@ def _detectar_rostros(frame: np.ndarray) -> tuple[int, list]:
 
 
 # ─────────────────────────────────────────────
+#  Reconocimiento facial vía HuggingFace Space
+# ─────────────────────────────────────────────
+
+def _reconocer_rostro_hf(face_frame: np.ndarray, camara_id: str = "00") -> dict:
+    """
+    Envía un recorte de rostro al HF Space y devuelve el resultado.
+    Retorna dict con: conocido, nombre, confianza
+    Si HF_SPACE_URL está vacío o hay error → devuelve desconocido.
+    """
+    if not HF_SPACE_URL:
+        return {"conocido": False, "nombre": "desconocido", "confianza": 0.0}
+    try:
+        # Codificar recorte a JPEG base64
+        ok, buf = cv2.imencode(".jpg", face_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            return {"conocido": False, "nombre": "desconocido", "confianza": 0.0}
+        b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
+        payload = json.dumps({"imagen_b64": b64, "camara_id": camara_id}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{HF_SPACE_URL}/reconocer",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resultado = json.loads(resp.read().decode("utf-8"))
+        print(
+            f"🤖 HF Space reconoció: {resultado.get('nombre')} "
+            f"| confianza={resultado.get('confianza', 0):.3f} "
+            f"| conocido={resultado.get('conocido')}"
+        )
+        return resultado
+    except urllib.error.URLError as e:
+        print(f"⚠️  HF Space no accesible: {e}")
+    except Exception as e:
+        print(f"⚠️  Error en reconocimiento facial HF: {e}")
+    return {"conocido": False, "nombre": "desconocido", "confianza": 0.0}
+
+
+# ─────────────────────────────────────────────
 #  Consulta placas registradas (Supabase)
 # ─────────────────────────────────────────────
 
@@ -400,15 +447,35 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
 
         # ── Detección de rostros con OpenCV ──
         rostros_count, coords_rostros = _detectar_rostros(frame)
+        nombres_reconocidos = []
+
         if rostros_count > 0:
             tipo = "persona"
             for (rx, ry, rw, rh) in coords_rostros:
-                cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), (0, 255, 0), 2)
-                cv2.putText(
-                    frame, "Rostro", (rx, ry - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2,
-                )
-            print(f"👤 {rostros_count} rostro(s) — cámara {camara_id}")
+                # Recorte del rostro para reconocimiento
+                recorte = frame[ry:ry + rh, rx:rx + rw]
+                if recorte.size > 0:
+                    res_hf = _reconocer_rostro_hf(recorte, camara_id)
+                    if res_hf.get("conocido"):
+                        nombres_reconocidos.append(res_hf["nombre"])
+                        conocido        = True
+                        nombre_conocido = res_hf["nombre"]
+                        color_rect = (0, 200, 0)    # verde — conocido
+                        etiqueta   = nombre_conocido
+                    else:
+                        color_rect = (0, 0, 255)    # rojo — desconocido
+                        etiqueta   = "Desconocido"
+
+                    cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), color_rect, 2)
+                    cv2.putText(
+                        frame, etiqueta, (rx, ry - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_rect, 2,
+                    )
+                else:
+                    cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), (0, 255, 0), 2)
+
+            label_log = ", ".join(nombres_reconocidos) if nombres_reconocidos else "desconocidos"
+            print(f"👤 {rostros_count} rostro(s) ({label_log}) — cámara {camara_id}")
 
         # ── Ignorar si no hay nada relevante ──
         if tipo is None:
@@ -441,17 +508,19 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
             # ── Insertar evento en Supabase ──
             try:
                 supabase_client.table("eventos").insert({
-                    "tipo":     tipo,
-                    "valor":    valor,
-                    "camara":   camara_id,
-                    "foto_url": foto_url,
-                    "conocido": conocido,
-                    "rostros":  rostros_count,
+                    "tipo":           tipo,
+                    "valor":          valor,
+                    "camara":         camara_id,
+                    "foto_url":       foto_url,
+                    "conocido":       conocido,
+                    "rostros":        rostros_count,
+                    "nombre_persona": nombre_conocido or None,
                     # created_at lo genera Supabase automáticamente (default now())
                 }).execute()
                 print(
                     f"✅ Evento guardado | tipo={tipo} | placa='{valor}' "
-                    f"| rostros={rostros_count} | conocido={conocido} | cámara={camara_id}"
+                    f"| rostros={rostros_count} | conocido={conocido} "
+                    f"| persona='{nombre_conocido}' | cámara={camara_id}"
                 )
             except Exception as e:
                 print(f"❌ Error insertando evento en Supabase: {e}")

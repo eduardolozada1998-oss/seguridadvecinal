@@ -1,0 +1,18 @@
+fastapi==0.111.0
+uvicorn==0.29.0
+# Reconocimiento facial
+deepface==0.0.93
+tensorflow-cpu==2.16.1
+# Deteccion con YOLO ONNX
+onnxruntime==1.18.0
+# Vision por computadora
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+Pillow==10.3.0
+# OCR placas
+pytesseract==0.3.10
+# Base de datos
+supabase==2.4.0
+# API
+pydantic==2.7.1
+python-multipart==0.0.9
