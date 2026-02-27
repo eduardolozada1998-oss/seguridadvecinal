@@ -54,8 +54,13 @@ YOLO_INPUT_SIZE = 640
 CONF_THRESHOLD  = 0.5
 IOU_THRESHOLD   = 0.45
 
-# URLs de descarga en runtime (archivos pequeños, en segundos)
-URL_YOLO_ONNX   = "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx"
+# URLs de descarga en runtime — lista de fallbacks por si alguna falla
+URL_YOLO_ONNX_FALLBACKS = [
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx",
+    "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx",
+    "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.onnx",
+    "https://huggingface.co/Ultralytics/YOLOv8n/resolve/main/yolov8n.onnx",
+]
 URL_HAARCASCADE = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
 
 # ─────────────────────────────────────────────
@@ -89,6 +94,22 @@ def _descargar_si_falta(url: str, destino: str, descripcion: str) -> bool:
         return False
 
 
+def _descargar_yolo_con_fallbacks(destino: str) -> bool:
+    for url in URL_YOLO_ONNX_FALLBACKS:
+        print(f"📥 Descargando YOLOv8n ONNX desde {url} ...")
+        try:
+            urllib.request.urlretrieve(url, destino)
+            tam_kb = os.path.getsize(destino) // 1024
+            print(f"✅ YOLOv8n ONNX descargado ({tam_kb} KB)")
+            return True
+        except Exception as e:
+            print(f"⚠️  Falló {url}: {e}")
+            if os.path.exists(destino):
+                os.remove(destino)
+    print("❌ No se pudo descargar YOLOv8n ONNX desde ninguna fuente")
+    return False
+
+
 # ─────────────────────────────────────────────
 #  Inicialización / lifespan (FastAPI moderno)
 # ─────────────────────────────────────────────
@@ -119,7 +140,7 @@ async def lifespan(app: FastAPI):
         print("✅ Face cascade cargado" if face_cascade else "❌ Face cascade inválido")
 
     # YOLOv8n ONNX (~6 MB) — sin PyTorch
-    if _descargar_si_falta(URL_YOLO_ONNX, "yolov8n.onnx", "YOLOv8n ONNX"):
+    if _descargar_yolo_con_fallbacks("yolov8n.onnx"):
         try:
             so = ort.SessionOptions()
             so.intra_op_num_threads = 2
@@ -515,13 +536,25 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
         camara_id      = _detectar_camara_desde_asunto(asunto)
         fotos_halladas = 0
 
+        # Debug: mostrar todas las partes del email para diagnosticar formato del DVR
+        for i, p in enumerate(msg.walk()):
+            if p.get_content_maintype() != "multipart":
+                fn  = p.get_filename() or ""
+                ct  = p.get_content_type()
+                cd  = p.get("Content-Disposition", "—")
+                print(f"  [parte {i}] ct={ct} | fn='{fn}' | cd={cd[:60]}")
+
         for part in msg.walk():
             if part.get_content_maintype() == "multipart":
                 continue
-            if part.get("Content-Disposition") is None:
-                continue
 
             filename = part.get_filename() or ""
+            # Si no hay filename en Content-Disposition buscar en Content-Type
+            if not filename:
+                ct = part.get("Content-Type", "")
+                m = re.search(r'name=["\']?([^";]+)', ct)
+                if m:
+                    filename = m.group(1).strip()
             fname_lower = filename.lower()
 
             # ── Imagen directa ──────────────────────────────────────
