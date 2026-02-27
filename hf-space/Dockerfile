@@ -18,8 +18,13 @@ ENV PATH="/home/user/.local/bin:$PATH"
 WORKDIR /app
 
 COPY --chown=user requirements.txt .
-# dlib-bin primero (wheel pre-compilado) para que face_recognition no compile dlib desde fuente
+# 1) dlib-bin: wheel pre-compilado del modulo dlib (sin cmake)
 RUN pip install --no-cache-dir dlib-bin
+# 2) face-recognition-models: archivos de modelos requeridos por face_recognition
+RUN pip install --no-cache-dir face-recognition-models
+# 3) face_recognition --no-deps: evita que pip intente compilar dlib>=19.7 desde fuente
+RUN pip install --no-cache-dir --no-deps face_recognition==1.3.0
+# 4) Resto de dependencias (face_recognition ya NO esta aqui)
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Verificar face_recognition (dlib viene con wheels pre-compilados para cp311)
