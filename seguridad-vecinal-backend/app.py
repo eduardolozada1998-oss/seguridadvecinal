@@ -522,7 +522,10 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                 continue
 
             filename = part.get_filename() or ""
-            if any(filename.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
+            fname_lower = filename.lower()
+
+            # ── Imagen directa ──────────────────────────────────────
+            if any(fname_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
                 img_bytes = part.get_payload(decode=True)
                 if not img_bytes:
                     print(f"⚠️  Adjunto vacío: {filename}")
@@ -531,7 +534,6 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                 fotos_halladas += 1
                 print(f"📸 Imagen recibida: '{filename}' — Cámara {camara_id} ({len(img_bytes) // 1024} KB)")
 
-                # Procesar en hilo separado para no bloquear el loop de email
                 hilo = threading.Thread(
                     target=procesar_foto,
                     args=(img_bytes, camara_id),
@@ -540,8 +542,53 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                 )
                 hilo.start()
 
+            # ── Video (.mov / .mp4 / .avi) → extraer frame ──────────
+            elif any(fname_lower.endswith(ext) for ext in [".mov", ".mp4", ".avi", ".mkv"]):
+                video_bytes = part.get_payload(decode=True)
+                if not video_bytes:
+                    print(f"⚠️  Adjunto de video vacío: {filename}")
+                    continue
+
+                print(f"🎥 Video recibido: '{filename}' — Cámara {camara_id} ({len(video_bytes) // 1024} KB) — extrayendo frame…")
+
+                # Escribir a archivo temporal y leer con OpenCV
+                import tempfile, os as _os
+                with tempfile.NamedTemporaryFile(suffix=fname_lower[-4:], delete=False) as tmp:
+                    tmp.write(video_bytes)
+                    tmp_path = tmp.name
+
+                try:
+                    cap = cv2.VideoCapture(tmp_path)
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    # Ir al 20% del video para evitar pantalla negra inicial
+                    target_frame = max(0, int(total_frames * 0.20))
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    ret, frame_cv = cap.read()
+                    cap.release()
+
+                    if ret and frame_cv is not None:
+                        success, buf = cv2.imencode(".jpg", frame_cv, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        if success:
+                            img_bytes = buf.tobytes()
+                            fotos_halladas += 1
+                            hilo = threading.Thread(
+                                target=procesar_foto,
+                                args=(img_bytes, camara_id),
+                                daemon=True,
+                                name=f"proc-cam{camara_id}",
+                            )
+                            hilo.start()
+                        else:
+                            print(f"❌ No se pudo codificar frame del video: {filename}")
+                    else:
+                        print(f"❌ No se pudo leer frame del video: {filename}")
+                except Exception as ve:
+                    print(f"❌ Error procesando video '{filename}': {ve}")
+                finally:
+                    _os.unlink(tmp_path)
+
         if fotos_halladas == 0:
-            print(f"ℹ️  Email sin adjuntos de imagen: '{asunto}'")
+            print(f"ℹ️  Email sin adjuntos de imagen/video procesables: '{asunto}'")
 
         # Marcar como leído independientemente
         mail.store(num, "+FLAGS", "\\Seen")
