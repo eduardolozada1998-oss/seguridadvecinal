@@ -41,11 +41,11 @@ personas_conocidas: list = []   # [{nombre: str, encoding: np.ndarray}]
 # ---------------------------------------------------------------------------
 # Lifespan — inicializacion segura
 # ---------------------------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global supabase_client, model, reader, face_cascade
+def _inicializar_modelos():
+    """Carga modelos ML en un hilo daemon para no bloquear el startup del servidor."""
+    global supabase_client, model, reader, face_cascade, FR_DISPONIBLE
 
-    print("Iniciando Sistema de Seguridad Vecinal...")
+    print("Iniciando carga de modelos en segundo plano...")
 
     # Supabase
     if SUPABASE_URL and SUPABASE_KEY:
@@ -92,7 +92,6 @@ async def lifespan(app: FastAPI):
         print(f"Face cascade ERROR: {e}")
 
     # Face recognition (dlib)
-    global FR_DISPONIBLE
     try:
         import face_recognition  # noqa: F401
         FR_DISPONIBLE = True
@@ -109,7 +108,14 @@ async def lifespan(app: FastAPI):
     else:
         print("WARN: GMAIL no configurado")
 
-    print("Sistema listo")
+    print("Modelos listos")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Arrancar carga de modelos en segundo plano para que HF vea el servidor listo
+    threading.Thread(target=_inicializar_modelos, daemon=True, name="init").start()
+    print("Servidor listo — modelos cargando en segundo plano")
     yield
     print("Sistema detenido")
 
