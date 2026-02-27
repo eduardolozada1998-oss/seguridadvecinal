@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     libxext6 \
     wget \
+    cmake \
+    build-essential \
+    libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # HuggingFace requiere usuario con UID 1000
@@ -19,6 +22,10 @@ WORKDIR /app
 
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
+
+# Verificar face_recognition (dlib viene con wheels pre-compilados para cp311)
+RUN python -c 'import face_recognition; print("face_recognition OK")' \
+    || echo 'face_recognition no disponible, se continuara sin reconocimiento'
 
 COPY --chown=user . /app
 

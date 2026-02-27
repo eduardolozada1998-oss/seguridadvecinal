@@ -1,4 +1,5 @@
-﻿from fastapi import FastAPI
+﻿from fastapi import FastAPI, UploadFile, Form, File
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import threading
 import os
@@ -30,10 +31,12 @@ EMAIL_ALERTA = os.environ.get("EMAIL_ALERTA", GMAIL_USER)
 # ---------------------------------------------------------------------------
 # Estado global (se inicializa en lifespan, no al importar)
 # ---------------------------------------------------------------------------
-supabase_client = None
-model           = None
-reader          = None
-face_cascade    = None
+supabase_client    = None
+model              = None
+reader             = None
+face_cascade       = None
+FR_DISPONIBLE      = False
+personas_conocidas: list = []   # [{nombre: str, encoding: np.ndarray}]
 
 # ---------------------------------------------------------------------------
 # Lifespan — inicializacion segura
@@ -88,6 +91,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Face cascade ERROR: {e}")
 
+    # Face recognition (dlib)
+    global FR_DISPONIBLE
+    try:
+        import face_recognition  # noqa: F401
+        FR_DISPONIBLE = True
+        cargar_personas()
+        print(f"Face recognition OK — {len(personas_conocidas)} persona(s) registrada(s)")
+    except Exception as e:
+        print(f"Face recognition no disponible: {e}")
+
     # Hilo IMAP
     if GMAIL_USER and GMAIL_PASS:
         t = threading.Thread(target=_bucle_emails, daemon=True, name="imap")
@@ -102,6 +115,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Seguridad Vecinal", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://seguridadvecinal.pages.dev", "http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -137,16 +157,74 @@ def _numero_camara(texto: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Deteccion de rostros (OpenCV — sin dependencias extra)
+# Zona horaria y helpers
 # ---------------------------------------------------------------------------
-def _detectar_rostros(frame: np.ndarray):
+def _es_horario_nocturno() -> bool:
+    """True si la hora local (TZ_OFFSET env, default -6 Mexico) es 22:00-06:00."""
+    offset = int(os.environ.get("TZ_OFFSET", "-6"))
+    hora   = datetime.now(timezone(timedelta(hours=offset))).hour
+    return hora >= 22 or hora < 6
+
+
+def cargar_personas() -> None:
+    """Carga encodings de personas conocidas desde Supabase."""
+    global personas_conocidas
+    if not supabase_client:
+        return
+    try:
+        res = supabase_client.table("personas").select("nombre,encoding,foto_url").execute()
+        personas_conocidas = [
+            {
+                "nombre":   r["nombre"],
+                "encoding": np.array(r["encoding"], dtype=np.float64),
+                "foto_url": r.get("foto_url", ""),
+            }
+            for r in (res.data or [])
+        ]
+        print(f"Personas cargadas: {len(personas_conocidas)}")
+    except Exception as e:
+        print(f"cargar_personas ERROR: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Deteccion de rostros + reconocimiento opcional (face_recognition / Haar)
+# ---------------------------------------------------------------------------
+def _detectar_y_reconocer(frame: np.ndarray):
+    """Devuelve lista de (nombre, (x,y,w,h), recorte_bytes).
+    nombre='Desconocido' si no se reconoce o face_recognition no disponible."""
     if face_cascade is None:
-        return 0, []
-    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return []
+    gris   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     coords = face_cascade.detectMultiScale(
         gris, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
     )
-    return (len(coords), list(coords)) if len(coords) > 0 else (0, [])
+    if len(coords) == 0:
+        return []
+
+    resultados = []
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if FR_DISPONIBLE else None
+
+    for (x, y, w, h) in coords:
+        recorte   = frame[y:y+h, x:x+w]
+        ok, buf   = cv2.imencode(".jpg", recorte)
+        recorte_b = buf.tobytes() if ok else None
+        nombre    = "Desconocido"
+
+        if FR_DISPONIBLE and len(personas_conocidas) > 0:
+            import face_recognition as fr
+            # face_recognition usa formato (top, right, bottom, left)
+            face_locs = [(y, x + w, y + h, x)]
+            encs      = fr.face_encodings(rgb, known_face_locations=face_locs)
+            if encs:
+                dists = fr.face_distance(
+                    [p["encoding"] for p in personas_conocidas], encs[0]
+                )
+                idx = int(np.argmin(dists))
+                if dists[idx] < 0.55:   # 0=mismo rostro, 1=muy distinto
+                    nombre = personas_conocidas[idx]["nombre"]
+
+        resultados.append((nombre, (x, y, w, h), recorte_b))
+    return resultados
 
 
 # ---------------------------------------------------------------------------
@@ -181,13 +259,24 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
                             valor  = " ".join(textos).strip().upper()
                             print(f"Placa OCR: '{valor}'")
 
-        # Rostros Haar cascade (fallback y complemento)
-        n_rostros, coords_rostros = _detectar_rostros(frame)
+        # Rostros: deteccion + reconocimiento
+        reconocidos    = _detectar_y_reconocer(frame)
+        n_rostros      = len(reconocidos)
+        hay_sospechoso = False
+        primer_recorte = None
         if n_rostros > 0:
             tipo = "persona"
-            for (rx, ry, rw, rh) in coords_rostros:
-                cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), (0, 255, 0), 2)
-            print(f"Rostros detectados: {n_rostros} — cam {camara_id}")
+            for (nombre_r, (rx, ry, rw, rh), recorte_b) in reconocidos:
+                conocido_r = nombre_r != "Desconocido"
+                color = (0, 255, 0) if conocido_r else (0, 0, 255)  # verde/rojo
+                cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), color, 2)
+                cv2.putText(frame, nombre_r, (rx, max(ry - 8, 0)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+                if not conocido_r and _es_horario_nocturno():
+                    hay_sospechoso = True
+                    if primer_recorte is None:
+                        primer_recorte = recorte_b
+            print(f"Rostros: {n_rostros} — cam {camara_id}")
 
         if tipo is None:
             print(f"Cam {camara_id}: sin deteccion relevante")
@@ -214,12 +303,13 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
             except Exception as e:
                 print(f"Storage ERROR: {e}")
             try:
+                hay_conocido = any(n != "Desconocido" for n, _, _ in reconocidos) if reconocidos else False
                 supabase_client.table("eventos").insert({
                     "tipo":     tipo,
                     "valor":    valor,
                     "camara":   camara_id,
                     "foto_url": foto_url,
-                    "conocido": False,
+                    "conocido": hay_conocido,
                     "rostros":  n_rostros,
                 }).execute()
                 print(f"Evento guardado: {tipo} cam={camara_id}")
@@ -227,6 +317,8 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
                 print(f"Insert ERROR: {e}")
 
         _enviar_alerta(foto_out, tipo, valor, camara_id)
+        if hay_sospechoso and primer_recorte:
+            _enviar_alerta_sospechoso(primer_recorte, camara_id)
 
     except Exception as e:
         print(f"procesar_foto ERROR cam={camara_id}: {e}")
@@ -254,6 +346,30 @@ def _enviar_alerta(foto: bytes, tipo: str, valor: str, camara: str) -> None:
         print(f"Alerta enviada a {EMAIL_ALERTA}")
     except Exception as e:
         print(f"Alerta email ERROR: {e}")
+
+
+def _enviar_alerta_sospechoso(recorte: bytes, camara: str) -> None:
+    """Envia email con recorte de cara desconocida detectada en horario nocturno."""
+    if not GMAIL_USER or not GMAIL_PASS or not EMAIL_ALERTA:
+        return
+    try:
+        msg = MIMEMultipart()
+        msg["Subject"] = f"SOSPECHOSO detectado — Camara {camara}"
+        msg["From"]    = GMAIL_USER
+        msg["To"]      = EMAIL_ALERTA
+        msg.attach(MIMEText(
+            f"Persona DESCONOCIDA detectada en horario nocturno.\nCamara: {camara}\n"
+            "Revisa el dashboard para mas detalles.", "plain"
+        ))
+        img = MIMEImage(recorte, _subtype="jpeg")
+        img.add_header("Content-Disposition", "attachment", filename="sospechoso.jpg")
+        msg.attach(img)
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(GMAIL_USER, GMAIL_PASS)
+            s.sendmail(GMAIL_USER, EMAIL_ALERTA, msg.as_string())
+        print(f"Alerta sospechoso enviada a {EMAIL_ALERTA}")
+    except Exception as e:
+        print(f"Alerta sospechoso ERROR: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -417,3 +533,74 @@ def get_eventos():
         .execute()
     )
     return data.data
+
+
+@app.get("/personas")
+def listar_personas():
+    """Lista las personas registradas para reconocimiento."""
+    return [
+        {"nombre": p["nombre"], "foto_url": p.get("foto_url", "")}
+        for p in personas_conocidas
+    ]
+
+
+@app.post("/registrar-persona")
+async def registrar_persona(nombre: str = Form(...), foto: UploadFile = File(...)):
+    """Registra una persona conocida. Se sube una foto con cara visible."""
+    if not FR_DISPONIBLE:
+        return {"error": "face_recognition no disponible en este servidor"}
+    import face_recognition as fr
+
+    data  = await foto.read()
+    nparr = np.frombuffer(data, np.uint8)
+    img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return {"error": "No se pudo leer la imagen"}
+
+    rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    encs = fr.face_encodings(rgb)
+    if not encs:
+        return {"error": "No se detectó ningún rostro en la imagen"}
+
+    enc      = encs[0].tolist()   # 128 floats
+    foto_url = ""
+
+    if supabase_client:
+        # Guardar foto en storage
+        ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        arch = f"{nombre}_{ts}.jpg"
+        try:
+            supabase_client.storage.from_("personas").upload(
+                arch, data, file_options={"content-type": "image/jpeg"}
+            )
+            foto_url = f"{SUPABASE_URL}/storage/v1/object/public/personas/{arch}"
+        except Exception as e:
+            print(f"Storage personas ERROR: {e}")
+        # Guardar encoding en tabla
+        try:
+            supabase_client.table("personas").insert({
+                "nombre":   nombre,
+                "encoding": enc,
+                "foto_url": foto_url,
+            }).execute()
+        except Exception as e:
+            return {"error": str(e)}
+
+    cargar_personas()
+    return {"ok": True, "nombre": nombre, "total": len(personas_conocidas)}
+
+
+@app.delete("/personas/{nombre}")
+def eliminar_persona(nombre: str):
+    """Elimina una persona del registro."""
+    if supabase_client:
+        supabase_client.table("personas").delete().eq("nombre", nombre).execute()
+    cargar_personas()
+    return {"ok": True}
+
+
+@app.post("/recargar-personas")
+def recargar_personas_endpoint():
+    """Fuerza recarga de encodings desde Supabase."""
+    cargar_personas()
+    return {"ok": True, "total": len(personas_conocidas)}

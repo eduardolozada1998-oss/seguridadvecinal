@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Galeria from './pages/Galeria'
 import Placas from './pages/Placas'
 import Camaras from './pages/Camaras'
+import Personas from './pages/Personas'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="galeria" element={<Galeria />} />
           <Route path="placas" element={<Placas />} />
           <Route path="camaras" element={<Camaras />} />
+          <Route path="personas" element={<Personas />} />
         </Route>
       </Routes>
     </BrowserRouter>
