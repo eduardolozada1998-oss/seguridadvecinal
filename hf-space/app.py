@@ -154,11 +154,15 @@ def _numero_camara(texto: str) -> str:
     """Extrae numero de camara de cualquier texto. Devuelve '01'-'08'."""
     if not texto:
         return "01"
-    # Normaliza: c con o sin acento, espacios, guiones
-    norm = texto.lower().replace("\xe1", "a")  # a con acento -> a
-    m = re.search(r'c(?:a|\xe1)mara\s*[_\-]?\s*0?(\d)', texto.lower()) \
+    # Normalizar: quitar acentos, pasar a minusculas
+    norm = texto.lower()
+    for src, dst in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("\xe1","a")]:
+        norm = norm.replace(src, dst)
+    # Buscar patron: camara/camera seguido de numero
+    m = re.search(r'c[a\xe1]mara\s*[_\-]?\s*0?(\d)', norm) \
         or re.search(r'camara\s*[_\-]?\s*0?(\d)', norm) \
-        or re.search(r'camera\s*[_\-]?\s*0?(\d)', norm)
+        or re.search(r'camera\s*[_\-]?\s*0?(\d)', norm) \
+        or re.search(r'cam\s*[_\-]?\s*0?(\d)', norm)
     return m.group(1).zfill(2) if m else "01"
 
 
