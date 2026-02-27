@@ -1,0 +1,41 @@
+# Dependencias
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Variables de entorno (nunca subir credenciales)
+.env
+.env.local
+.env.production
+
+# Modelos descargados en runtime (pesados, no necesarios en repo)
+*.pt
+*.onnx
+haarcascade_frontalface_default.xml
+
+# Logs
+*.log
+logs/
+
+# Caché
+.cache/
+.easyocr/
+__MACOSX/
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

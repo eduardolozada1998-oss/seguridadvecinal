@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: seguridad-vecinal
+    env: python
+    # Plan GRATUITO de Render (512 MB RAM)
+    # Con onnxruntime + pytesseract usamos ~300 MB ✅
+    plan: free
+    region: oregon  # us-west-2 — buena latencia para LATAM
+    # buildCommand: instala tesseract-ocr (sistema) y luego pip
+    buildCommand: apt-get update -qq && apt-get install -y -qq tesseract-ocr tesseract-ocr-spa && pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port 10000 --workers 1
+    # 1 worker: un solo proceso carga los modelos en RAM
+    healthCheckPath: /
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_PASS
+        sync: false
+      - key: EMAIL_ALERTA
+        sync: false
+      # Ruta del binario tesseract instalado por apt
+      - key: TESSERACT_CMD
+        value: /usr/bin/tesseract

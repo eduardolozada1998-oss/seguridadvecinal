@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────
+# Sistema de Seguridad Vecinal — Dependencias
+# Optimizado para Render FREE plan (512 MB RAM)
+#
+# RAM aproximada en runtime:
+#   onnxruntime-cpu  ~100 MB
+#   opencv-headless  ~80 MB
+#   pytesseract      ~50 MB
+#   Total estimado:  ~300 MB  ✅ cabe en plan gratuito
+#
+# NOTA: el buildCommand en render.yaml instala
+# tesseract-ocr vía apt antes de pip install.
+# ─────────────────────────────────────────────
+
+# Web framework
+fastapi
+uvicorn[standard]
+
+# Supabase
+supabase
+
+# Visión computacional (sin GUI)
+opencv-python-headless
+
+# YOLO inferencia ONNX — sin PyTorch (~2 MB paquete, ~100 MB RAM)
+onnxruntime-cpu
+
+# OCR de placas — wrapper Python para Tesseract (instalado por apt)
+pytesseract
+
+# Utilerías
+Pillow
+requests
+numpy<2
