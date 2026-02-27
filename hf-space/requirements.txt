@@ -3,7 +3,6 @@ torch==2.1.0+cpu
 torchvision==0.16.0+cpu
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-opencv-python-headless==4.9.0.80
 ultralytics==8.0.196
 easyocr==1.7.1
 supabase==2.9.1
