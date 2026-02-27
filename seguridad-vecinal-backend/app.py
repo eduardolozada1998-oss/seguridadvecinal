@@ -528,11 +528,22 @@ def enviar_alerta(
 
 def _detectar_camara_desde_asunto(asunto: str) -> str:
     """Extrae número de cámara del asunto. Ej: 'Camara3' → '03'."""
-    asunto_lower = asunto.lower()
+    # Decodificar RFC 2047 si el asunto viene codificado (=?utf-8?B?...?=)
+    asunto_dec = _decodificar_filename(asunto)
+    asunto_lower = asunto_dec.lower()
     for i in range(1, 9):
-        if f"camara{i}" in asunto_lower or f"cámara{i}" in asunto_lower:
+        if f"camara{i}" in asunto_lower or f"cámara{i}" in asunto_lower or f"camera{i}" in asunto_lower:
             return str(i).zfill(2)
     return "01"  # Default cámara 01
+
+
+def _detectar_camara_desde_filename(filename: str) -> str | None:
+    """Extrae número de cámara del nombre del archivo adjunto. Ej: 'Cámara3.jpg' → '03'."""
+    fname_lower = filename.lower()
+    for i in range(1, 9):
+        if f"camara{i}" in fname_lower or f"cámara{i}" in fname_lower or f"camera{i}" in fname_lower:
+            return str(i).zfill(2)
+    return None
 
 
 def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
@@ -567,7 +578,9 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
             except Exception as e:
                 print(f"⚠️  No se pudo parsear fecha del email: {e}")
 
+        asunto_dec = _decodificar_filename(asunto)
         camara_id      = _detectar_camara_desde_asunto(asunto)
+        print(f"📧 Email: '{asunto_dec}' → cámara {camara_id}")
         fotos_halladas = 0
 
         # Debug: mostrar todas las partes del email para diagnosticar formato del DVR
@@ -598,14 +611,17 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                     print(f"⚠️  Adjunto vacío: {filename}")
                     continue
 
+                # Intentar precisar la cámara desde el nombre del archivo
+                cam = _detectar_camara_desde_filename(filename) or camara_id
+
                 fotos_halladas += 1
-                print(f"📸 Imagen recibida: '{filename}' — Cámara {camara_id} ({len(img_bytes) // 1024} KB)")
+                print(f"📸 Imagen recibida: '{filename}' — Cámara {cam} ({len(img_bytes) // 1024} KB)")
 
                 hilo = threading.Thread(
                     target=procesar_foto,
-                    args=(img_bytes, camara_id),
+                    args=(img_bytes, cam),
                     daemon=True,
-                    name=f"proc-cam{camara_id}",
+                    name=f"proc-cam{cam}",
                 )
                 hilo.start()
 
@@ -616,7 +632,8 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                     print(f"⚠️  Adjunto de video vacío: {filename}")
                     continue
 
-                print(f"🎥 Video recibido: '{filename}' — Cámara {camara_id} ({len(video_bytes) // 1024} KB) — extrayendo frame…")
+                cam = _detectar_camara_desde_filename(filename) or camara_id
+                print(f"🎥 Video recibido: '{filename}' — Cámara {cam} ({len(video_bytes) // 1024} KB) — extrayendo frame…")
 
                 # Escribir a archivo temporal y leer con OpenCV
                 import tempfile, os as _os
@@ -640,9 +657,9 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                             fotos_halladas += 1
                             hilo = threading.Thread(
                                 target=procesar_foto,
-                                args=(img_bytes, camara_id),
+                                args=(img_bytes, cam),
                                 daemon=True,
-                                name=f"proc-cam{camara_id}",
+                                name=f"proc-cam{cam}",
                             )
                             hilo.start()
                         else:
