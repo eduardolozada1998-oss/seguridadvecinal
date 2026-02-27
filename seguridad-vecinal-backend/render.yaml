@@ -6,7 +6,10 @@ services:
     # Con onnxruntime + pytesseract usamos ~300 MB ✅
     plan: free
     region: oregon  # us-west-2 — buena latencia para LATAM
-    buildCommand: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-spa && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
+    nativePackages:
+      - tesseract-ocr
+      - tesseract-ocr-spa
     startCommand: uvicorn app:app --host 0.0.0.0 --port 10000 --workers 1
     # 1 worker: un solo proceso carga los modelos en RAM
     healthCheckPath: /

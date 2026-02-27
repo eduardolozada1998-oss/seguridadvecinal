@@ -12,10 +12,12 @@ RAM estimada en runtime:
 
 import os
 import re
+import shutil
 import time
 import threading
 import imaplib
 import email
+import email.header
 import smtplib
 import urllib.request
 from contextlib import asynccontextmanager
@@ -42,8 +44,9 @@ GMAIL_USER   = os.environ.get("GMAIL_USER", "")
 GMAIL_PASS   = os.environ.get("GMAIL_PASS", "")
 EMAIL_ALERTA = os.environ.get("EMAIL_ALERTA", GMAIL_USER)
 
-# Ruta del binario tesseract (inyectada vía render.yaml)
-TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "/usr/bin/tesseract")
+# Ruta del binario tesseract — auto-detecta si no está en la variable de entorno
+_tess_env = os.environ.get("TESSERACT_CMD", "")
+TESSERACT_CMD = _tess_env or shutil.which("tesseract") or "/usr/bin/tesseract"
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 # Clases COCO relevantes para seguridad
@@ -54,14 +57,15 @@ YOLO_INPUT_SIZE = 640
 CONF_THRESHOLD  = 0.5
 IOU_THRESHOLD   = 0.45
 
-# URLs de descarga en runtime — lista de fallbacks por si alguna falla
+# URLs ONNX — GitHub solo publica .pt, estos son mirrors comunitarios públicos
 URL_YOLO_ONNX_FALLBACKS = [
-    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx",
-    "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.onnx",
-    "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.onnx",
-    "https://huggingface.co/Ultralytics/YOLOv8n/resolve/main/yolov8n.onnx",
+    "https://github.com/ibaiGorordo/ONNX-YOLOv8-Object-Detection/releases/download/v1.0/yolov8n.onnx",
+    "https://github.com/WuJunde/yolov8_onnx/releases/download/v1.0/yolov8n.onnx",
 ]
 URL_HAARCASCADE = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
+
+# HOG para personas (fallback si YOLO no está disponible — ya incluido en OpenCV)
+_hog_detector = None
 
 # ─────────────────────────────────────────────
 #  Estado global (se inicializa en lifespan)
@@ -78,6 +82,23 @@ _modelo_lock = threading.Lock()
 # ─────────────────────────────────────────────
 #  Helper descarga
 # ─────────────────────────────────────────────
+
+def _decodificar_filename(raw: str) -> str:
+    """Decodifica filename con RFC 2047 (=?utf-8?B?...?= o =?utf-8?Q?...?=)."""
+    if not raw:
+        return ""
+    try:
+        parts = email.header.decode_header(raw)
+        decoded = ""
+        for part, charset in parts:
+            if isinstance(part, bytes):
+                decoded += part.decode(charset or "utf-8", errors="replace")
+            else:
+                decoded += part
+        return decoded.strip()
+    except Exception:
+        return raw
+
 
 def _descargar_si_falta(url: str, destino: str, descripcion: str) -> bool:
     if os.path.exists(destino):
@@ -169,6 +190,12 @@ async def lifespan(app: FastAPI):
         print("📬 Lector de emails iniciado (polling cada 30 s)")
     else:
         print("⚠️  Gmail no configurado — emails deshabilitados")
+
+    # HOG People Detector — fallback si YOLO falla (no requiere descarga)
+    global _hog_detector
+    _hog_detector = cv2.HOGDescriptor()
+    _hog_detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    print("✅ HOG people detector listo (fallback para YOLO)")
 
     print("✅ Sistema listo")
     yield
@@ -328,10 +355,6 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
     Analiza una imagen con YOLOv8 ONNX + Tesseract + OpenCV.
     Si detecta algo relevante → guarda en Supabase y envía alerta.
     """
-    if yolo_session is None:
-        print("⚠️  YOLO ONNX no disponible, saltando foto")
-        return
-
     try:
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -344,25 +367,36 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
         conocido        = False
         nombre_conocido = ""
 
-        # ── Inferencia YOLO ONNX ──
-        detecciones = _inferir_yolo(frame)
-        for det in detecciones:
-            cls, (x1, y1, x2, y2) = det["cls"], det["box"]
+        # ── Inferencia YOLO ONNX (si disponible) ──
+        if yolo_session is not None:
+            detecciones = _inferir_yolo(frame)
+            for det in detecciones:
+                cls, (x1, y1, x2, y2) = det["cls"], det["box"]
 
-            if cls == CLASE_PERSONA:
+                if cls == CLASE_PERSONA:
+                    tipo = "persona"
+
+                elif cls in CLASES_VEHICULO:
+                    tipo = "vehiculo"
+                    roi = frame[y1:y2, x1:x2]
+                    placa_detectada = _leer_placa_ocr(roi)
+                    if placa_detectada:
+                        valor = placa_detectada
+                        nombre = _buscar_placa_registrada(valor)
+                        if nombre:
+                            conocido        = True
+                            nombre_conocido = nombre
+                        print(f"🔖 Placa OCR: '{valor}' | Conocido: {nombre_conocido or 'no'}")
+
+        # ── Fallback: HOG people detector (si YOLO no está disponible) ──
+        elif _hog_detector is not None:
+            h_frame = cv2.resize(frame, (640, 480)) if frame.shape[1] > 640 else frame
+            rects, _ = _hog_detector.detectMultiScale(
+                h_frame, winStride=(8, 8), padding=(4, 4), scale=1.05
+            )
+            if len(rects) > 0:
                 tipo = "persona"
-
-            elif cls in CLASES_VEHICULO:
-                tipo = "vehiculo"
-                roi = frame[y1:y2, x1:x2]
-                placa_detectada = _leer_placa_ocr(roi)
-                if placa_detectada:
-                    valor = placa_detectada
-                    nombre = _buscar_placa_registrada(valor)
-                    if nombre:
-                        conocido        = True
-                        nombre_conocido = nombre
-                    print(f"🔖 Placa OCR: '{valor}' | Conocido: {nombre_conocido or 'no'}")
+                print(f"🚶 HOG: {len(rects)} persona(s) detectada(s) — cámara {camara_id}")
 
         # ── Detección de rostros con OpenCV ──
         rostros_count, coords_rostros = _detectar_rostros(frame)
@@ -548,13 +582,13 @@ def _procesar_mensaje_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
             if part.get_content_maintype() == "multipart":
                 continue
 
-            filename = part.get_filename() or ""
+            filename = _decodificar_filename(part.get_filename() or "")
             # Si no hay filename en Content-Disposition buscar en Content-Type
             if not filename:
                 ct = part.get("Content-Type", "")
                 m = re.search(r'name=["\']?([^";]+)', ct)
                 if m:
-                    filename = m.group(1).strip()
+                    filename = _decodificar_filename(m.group(1).strip())
             fname_lower = filename.lower()
 
             # ── Imagen directa ──────────────────────────────────────
