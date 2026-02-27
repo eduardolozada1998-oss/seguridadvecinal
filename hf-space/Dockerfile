@@ -21,18 +21,12 @@ COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Pre-descargar yolov8n.pt en build time (evita descarga al iniciar)
-RUN python -c "
-from ultralytics import YOLO
-YOLO('yolov8n.pt')
-print('yolov8n.pt descargado OK')
-" || echo 'YOLO pre-download fallo, se intentara en runtime'
+RUN python -c 'from ultralytics import YOLO; YOLO("yolov8n.pt"); print("yolov8n.pt OK")' \
+    || echo 'YOLO pre-download fallo, se intentara en runtime'
 
 # Pre-descargar modelos EasyOCR (en build time, no en el primer request)
-RUN python -c "
-import easyocr
-easyocr.Reader(['es', 'en'], gpu=False, verbose=False)
-print('EasyOCR modelos descargados OK')
-" || echo 'EasyOCR pre-download fallo'
+RUN python -c 'import easyocr; easyocr.Reader(["es","en"], gpu=False, verbose=False); print("EasyOCR OK")' \
+    || echo 'EasyOCR pre-download fallo'
 
 COPY --chown=user . /app
 
