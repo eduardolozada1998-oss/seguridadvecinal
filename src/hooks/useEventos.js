@@ -58,15 +58,21 @@ export function useEventos(filtros = {}) {
 
   // Suscripción en tiempo real
   useEffect(() => {
-    const canal = supabase
-      .channel('eventos-realtime')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'eventos' }, () => {
-        cargarEventos(0, true)
-      })
-      .subscribe()
-
+    let canal = null
+    try {
+      canal = supabase
+        .channel('eventos-realtime')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'eventos' }, () => {
+          cargarEventos(0, true)
+        })
+        .subscribe((status, err) => {
+          if (err) console.warn('Realtime suscripción error:', err)
+        })
+    } catch (err) {
+      console.warn('Realtime no disponible:', err)
+    }
     return () => {
-      supabase.removeChannel(canal)
+      if (canal) supabase.removeChannel(canal).catch(() => {})
     }
   }, [cargarEventos])
 
