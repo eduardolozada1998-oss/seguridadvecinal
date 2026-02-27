@@ -18,6 +18,8 @@ ENV PATH="/home/user/.local/bin:$PATH"
 WORKDIR /app
 
 COPY --chown=user requirements.txt .
+# dlib-bin primero (wheel pre-compilado) para que face_recognition no compile dlib desde fuente
+RUN pip install --no-cache-dir dlib-bin
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Verificar face_recognition (dlib viene con wheels pre-compilados para cp311)
