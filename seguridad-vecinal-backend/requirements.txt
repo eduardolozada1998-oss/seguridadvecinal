@@ -3,7 +3,7 @@
 # Optimizado para Render FREE plan (512 MB RAM)
 #
 # RAM aproximada en runtime:
-#   onnxruntime-cpu  ~100 MB
+#   onnxruntime      ~100 MB
 #   opencv-headless  ~80 MB
 #   pytesseract      ~50 MB
 #   Total estimado:  ~300 MB  ✅ cabe en plan gratuito
@@ -23,7 +23,7 @@ supabase
 opencv-python-headless
 
 # YOLO inferencia ONNX — sin PyTorch (~2 MB paquete, ~100 MB RAM)
-onnxruntime-cpu
+onnxruntime
 
 # OCR de placas — wrapper Python para Tesseract (instalado por apt)
 pytesseract
