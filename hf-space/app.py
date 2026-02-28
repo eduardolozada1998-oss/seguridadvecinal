@@ -527,31 +527,42 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
         traceback.print_exc()
 
 
+# Estado del bucle IMAP para diagnóstico
+_imap_estado = {"ok": False, "ultimo_check": None, "ultimo_error": None, "emails_procesados": 0}
+
+
 # ---------------------------------------------------------------------------
 # Bucle IMAP — mantiene conexion abierta, reconecta con backoff
 # ---------------------------------------------------------------------------
 def _bucle_emails() -> None:
+    global _imap_estado
     backoff = 30
     while True:
         try:
             with imaplib.IMAP4_SSL("imap.gmail.com") as mail:
                 mail.login(GMAIL_USER, GMAIL_PASS)
-                backoff = 30  # reset al conectar bien
+                backoff = 30
+                _imap_estado["ok"] = True
+                _imap_estado["ultimo_error"] = None
                 while True:
                     mail.select("INBOX")
                     _, nums = mail.search(None, "UNSEEN")
                     ids = nums[0].split() if nums[0] else []
+                    _imap_estado["ultimo_check"] = datetime.now(timezone.utc).isoformat()
                     if ids:
                         print(f"{len(ids)} email(s) nuevo(s)")
                         for num in ids:
                             _procesar_email(mail, num)
+                            _imap_estado["emails_procesados"] += 1
                     else:
                         print("Sin emails nuevos")
                     time.sleep(30)
         except Exception as e:
+            _imap_estado["ok"] = False
+            _imap_estado["ultimo_error"] = str(e)
             print(f"IMAP ERROR: {e} — reintento en {backoff}s")
             time.sleep(backoff)
-            backoff = min(backoff * 2, 300)  # maximo 5 minutos
+            backoff = min(backoff * 2, 300)
 
 
 # ---------------------------------------------------------------------------
@@ -650,3 +661,167 @@ def recargar_personas_endpoint():
     """Fuerza recarga de encodings desde Supabase."""
     cargar_personas()
     return {"ok": True, "total": len(personas_conocidas)}
+
+
+@app.get("/debug")
+def debug():
+    """Diagnostico completo del sistema."""
+    hilos = [t.name for t in threading.enumerate()]
+    sb_ok = False
+    sb_error = None
+    sb_eventos = None
+    if supabase_client:
+        try:
+            r = supabase_client.table("eventos").select("id,camara,tipo,created_at").order("created_at", desc=True).limit(5).execute()
+            sb_ok = True
+            sb_eventos = r.data
+        except Exception as e:
+            sb_error = str(e)
+    return {
+        "modelos": {
+            "yolo":     model is not None,
+            "ocr":      reader is not None,
+            "face_cascade": face_cascade is not None,
+            "face_recognition": FR_DISPONIBLE,
+            "supabase": supabase_client is not None,
+        },
+        "imap": _imap_estado,
+        "gmail_configurado": bool(GMAIL_USER and GMAIL_PASS),
+        "gmail_user": GMAIL_USER[:4] + "****" if GMAIL_USER else None,
+        "personas_cargadas": len(personas_conocidas),
+        "hilos_activos": hilos,
+        "supabase_query": {"ok": sb_ok, "error": sb_error, "ultimos_eventos": sb_eventos},
+        "hora_servidor_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/forzar-emails")
+def forzar_emails():
+    """Lee todos los emails no leidos del inbox ignorando limite de tiempo y los procesa."""
+    if not GMAIL_USER or not GMAIL_PASS:
+        return {"error": "Gmail no configurado"}
+    resultados = []
+    try:
+        with imaplib.IMAP4_SSL("imap.gmail.com") as mail:
+            mail.login(GMAIL_USER, GMAIL_PASS)
+            mail.select("INBOX")
+            # Buscar TODOS los no leidos
+            _, nums = mail.search(None, "UNSEEN")
+            ids = nums[0].split() if nums[0] else []
+            resultados.append(f"Emails no leidos encontrados: {len(ids)}")
+            for num in ids:
+                try:
+                    _, msg_data = mail.fetch(num, "(RFC822)")
+                    if not msg_data or not msg_data[0]:
+                        continue
+                    msg    = email.message_from_bytes(msg_data[0][1])
+                    asunto = _decodificar(msg.get("Subject", ""))
+                    fecha  = msg.get("Date", "")
+                    resultados.append(f"Email: '{asunto}' | {fecha}")
+                    # Procesar sin limite de tiempo — llamar directo sin el filtro
+                    _procesar_email_forzado(mail, num, msg)
+                except Exception as e:
+                    resultados.append(f"Error en email: {e}")
+    except Exception as e:
+        return {"error": str(e), "log": resultados}
+    return {"ok": True, "log": resultados}
+
+
+def _procesar_email_forzado(mail, num, msg) -> None:
+    """Igual que _procesar_email pero sin filtro de antiguedad."""
+    try:
+        asunto = msg.get("Subject", "")
+        if "ALERTA:" in asunto:
+            mail.store(num, "+FLAGS", "\\Seen")
+            return
+
+        asunto_dec  = _decodificar(asunto)
+        camara_base = _numero_camara(asunto_dec)
+        print(f"[FORZADO] Email: '{asunto_dec}' -> camara base={camara_base}")
+
+        # Leer camara desde cuerpo XML
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct in ('text/plain', 'text/xml', 'application/xml', 'text/html'):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    try:
+                        cuerpo = payload.decode('utf-8', errors='replace')
+                        cam_cuerpo = _camara_desde_cuerpo(cuerpo)
+                        if cam_cuerpo:
+                            camara_base = cam_cuerpo
+                            print(f"[FORZADO] Camara desde XML: {camara_base}")
+                            break
+                    except Exception:
+                        pass
+
+        fotos = 0
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            filename   = _decodificar(part.get_filename() or "")
+            fname_lower = filename.lower()
+            cam = _numero_camara(filename) if filename else camara_base
+            if cam == "01" and camara_base != "01":
+                cam = camara_base
+
+            if any(fname_lower.endswith(e) for e in [".jpg", ".jpeg", ".png"]):
+                data = part.get_payload(decode=True)
+                if not data:
+                    continue
+                fotos += 1
+                print(f"[FORZADO] Imagen '{filename}' -> cam {cam}")
+                threading.Thread(target=procesar_foto, args=(data, cam), daemon=True).start()
+
+            elif any(fname_lower.endswith(e) for e in [".mov", ".mp4", ".avi", ".mkv"]):
+                data = part.get_payload(decode=True)
+                if not data:
+                    continue
+                ext = fname_lower[-4:]
+                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                    tmp.write(data)
+                    tmp_path = tmp.name
+                try:
+                    cap   = cv2.VideoCapture(tmp_path)
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(total * 0.20)))
+                    ret, fr = cap.read()
+                    cap.release()
+                    if ret and fr is not None:
+                        ok, buf = cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        if ok:
+                            fotos += 1
+                            print(f"[FORZADO] Video '{filename}' -> cam {cam}")
+                            threading.Thread(target=procesar_foto, args=(buf.tobytes(), cam), daemon=True).start()
+                except Exception as e:
+                    print(f"[FORZADO] Video ERROR: {e}")
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+        mail.store(num, "+FLAGS", "\\Seen")
+        print(f"[FORZADO] {fotos} foto(s)/video(s) procesados en cam={camara_base}")
+    except Exception as e:
+        print(f"_procesar_email_forzado ERROR: {e}")
+        traceback.print_exc()
+
+
+@app.post("/test-supabase")
+def test_supabase():
+    """Inserta un evento de prueba en Supabase para verificar la conexion."""
+    if not supabase_client:
+        return {"error": "Supabase no conectado"}
+    try:
+        supabase_client.table("eventos").insert({
+            "tipo":     "persona",
+            "valor":    "TEST",
+            "camara":   "03",
+            "foto_url": "",
+            "conocido": False,
+            "rostros":  0,
+        }).execute()
+        return {"ok": True, "mensaje": "Evento de prueba insertado en camara 03"}
+    except Exception as e:
+        return {"error": str(e)}
