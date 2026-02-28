@@ -87,14 +87,22 @@ def _inicializar_modelos():
     except Exception as e:
         print(f"EasyOCR ERROR: {e}")
 
-    # OpenCV Haar cascade para rostros (ya incluido en opencv, 0 MB extra)
+    # MediaPipe Face Detection (mucho mejor que Haar: detecta perfiles, nocturno, parcial)
     try:
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        cc = cv2.CascadeClassifier(cascade_path)
-        face_cascade = cc if not cc.empty() else None
-        print("Face cascade OK" if face_cascade else "Face cascade ERROR")
+        import mediapipe as mp
+        face_cascade = mp.solutions.face_detection.FaceDetection(
+            model_selection=1, min_detection_confidence=0.4
+        )
+        print("MediaPipe Face Detection OK")
     except Exception as e:
-        print(f"Face cascade ERROR: {e}")
+        # Fallback a Haar si MediaPipe no está disponible
+        try:
+            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            cc = cv2.CascadeClassifier(cascade_path)
+            face_cascade = cc if not cc.empty() else None
+            print("Face cascade Haar OK (fallback)" if face_cascade else "Face cascade ERROR")
+        except Exception as e2:
+            print(f"Face cascade ERROR: {e} / {e2}")
 
     # Face recognition (dlib)
     try:
@@ -226,18 +234,52 @@ def cargar_personas() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Deteccion de rostros + reconocimiento opcional (face_recognition / Haar)
+# Deteccion de rostros + reconocimiento (MediaPipe + face_recognition)
 # ---------------------------------------------------------------------------
 def _detectar_y_reconocer(frame: np.ndarray):
     """Devuelve lista de (nombre, (x,y,w,h), recorte_bytes).
-    nombre='Desconocido' si no se reconoce o face_recognition no disponible."""
+    Usa MediaPipe si disponible, sino Haar. nombre='Desconocido' si no reconoce."""
     if face_cascade is None:
         return []
-    gris   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    coords = face_cascade.detectMultiScale(
-        gris, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-    )
-    if len(coords) == 0:
+
+    h_img, w_img = frame.shape[:2]
+    coords = []
+
+    # --- MediaPipe ---
+    try:
+        import mediapipe as mp
+        if isinstance(face_cascade, mp.solutions.face_detection.FaceDetection):
+            rgb_mp = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            res_mp = face_cascade.process(rgb_mp)
+            if res_mp.detections:
+                for det in res_mp.detections:
+                    bb = det.location_data.relative_bounding_box
+                    x = max(0, int(bb.xmin * w_img))
+                    y = max(0, int(bb.ymin * h_img))
+                    w = int(bb.width  * w_img)
+                    h = int(bb.height * h_img)
+                    # Ampliar un 20% para capturar la cara completa
+                    pad_x = int(w * 0.15)
+                    pad_y = int(h * 0.20)
+                    x = max(0, x - pad_x)
+                    y = max(0, y - pad_y)
+                    w = min(w_img - x, w + 2 * pad_x)
+                    h = min(h_img - y, h + 2 * pad_y)
+                    coords.append((x, y, w, h))
+    except Exception:
+        pass
+
+    # --- Fallback Haar ---
+    if not coords:
+        try:
+            gris   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            coords = list(face_cascade.detectMultiScale(
+                gris, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+            ))
+        except Exception:
+            pass
+
+    if not coords:
         return []
 
     resultados = []
@@ -245,13 +287,12 @@ def _detectar_y_reconocer(frame: np.ndarray):
 
     for (x, y, w, h) in coords:
         recorte   = frame[y:y+h, x:x+w]
-        ok, buf   = cv2.imencode(".jpg", recorte)
+        ok, buf   = cv2.imencode(".jpg", recorte, [cv2.IMWRITE_JPEG_QUALITY, 90])
         recorte_b = buf.tobytes() if ok else None
         nombre    = "Desconocido"
 
         if FR_DISPONIBLE and len(personas_conocidas) > 0:
             import face_recognition as fr
-            # face_recognition usa formato (top, right, bottom, left)
             face_locs = [(y, x + w, y + h, x)]
             encs      = fr.face_encodings(rgb, known_face_locations=face_locs)
             if encs:
@@ -259,11 +300,37 @@ def _detectar_y_reconocer(frame: np.ndarray):
                     [p["encoding"] for p in personas_conocidas], encs[0]
                 )
                 idx = int(np.argmin(dists))
-                if dists[idx] < 0.55:   # 0=mismo rostro, 1=muy distinto
+                if dists[idx] < 0.55:
                     nombre = personas_conocidas[idx]["nombre"]
 
         resultados.append((nombre, (x, y, w, h), recorte_b))
     return resultados
+
+
+# ---------------------------------------------------------------------------
+# Guardar rostro desconocido en Supabase (tabla 'desconocidos')
+# ---------------------------------------------------------------------------
+def _guardar_rostro_desconocido(recorte_b: bytes, camara_id: str) -> None:
+    """Sube el recorte de cara a Storage y lo registra en tabla 'desconocidos'."""
+    if not supabase_client:
+        return
+    try:
+        ts    = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        nombre_arch = f"desc_{camara_id}_{ts}.jpg"
+        supabase_client.storage.from_("desconocidos").upload(
+            nombre_arch, recorte_b,
+            file_options={"content-type": "image/jpeg"}
+        )
+        foto_url = f"{SUPABASE_URL}/storage/v1/object/public/desconocidos/{nombre_arch}"
+        supabase_client.table("desconocidos").insert({
+            "camara":   camara_id,
+            "foto_url": foto_url,
+            "aprobado": False,   # pendiente de revision en el panel
+            "nombre":   None,
+        }).execute()
+        print(f"Rostro desconocido guardado: {nombre_arch} cam={camara_id}")
+    except Exception as e:
+        print(f"_guardar_rostro_desconocido ERROR: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +360,21 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
                         tipo = "vehiculo"
                         if reader is not None:
                             x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            roi    = frame[y1:y2, x1:x2]
-                            textos = reader.readtext(roi, detail=0)
-                            valor  = " ".join(textos).strip().upper()
+                            # Expandir ROI 30% para capturar placa debajo del vehiculo
+                            h_frame, w_frame = frame.shape[:2]
+                            pad  = int((y2 - y1) * 0.35)
+                            roi  = frame[min(y1, y1+pad):min(h_frame, y2+pad),
+                                         max(0, x1):min(w_frame, x2)]
+                            # Preprocesado: escalar x2, escala de grises, ecualizar
+                            roi_big = cv2.resize(roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                            gris    = cv2.cvtColor(roi_big, cv2.COLOR_BGR2GRAY)
+                            gris    = cv2.equalizeHist(gris)
+                            textos  = reader.readtext(gris, detail=0,
+                                                      allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ')
+                            # Limpiar: solo alfanumérico, mínimo 3 chars
+                            raw_placa = " ".join(textos).strip().upper()
+                            raw_placa = re.sub(r'[^A-Z0-9\-]', '', raw_placa)
+                            valor = raw_placa if len(raw_placa) >= 3 else ""
                             print(f"Placa OCR: '{valor}'")
 
         # Rostros: deteccion + reconocimiento
@@ -309,8 +388,16 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
                 conocido_r = nombre_r != "Desconocido"
                 color = (0, 255, 0) if conocido_r else (0, 0, 255)  # verde/rojo
                 cv2.rectangle(frame, (rx, ry), (rx + rw, ry + rh), color, 2)
-                cv2.putText(frame, nombre_r, (rx, max(ry - 8, 0)),
+                label = nombre_r if conocido_r else "Desconocido"
+                cv2.putText(frame, label, (rx, max(ry - 8, 0)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+                # Guardar recorte de cara desconocida en Supabase automáticamente
+                if not conocido_r and recorte_b and supabase_client:
+                    threading.Thread(
+                        target=_guardar_rostro_desconocido,
+                        args=(recorte_b, camara_id),
+                        daemon=True
+                    ).start()
                 if not conocido_r and _es_horario_nocturno():
                     hay_sospechoso = True
                     if primer_recorte is None:
@@ -1003,5 +1090,89 @@ def test_supabase():
             "rostros":  0,
         }).execute()
         return {"ok": True, "mensaje": "Evento de prueba insertado en camara 03"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# API — Desconocidos (panel de administracion)
+# ---------------------------------------------------------------------------
+@app.get("/desconocidos")
+def listar_desconocidos(limit: int = 50):
+    """Lista los rostros desconocidos capturados, pendientes de revision."""
+    if not supabase_client:
+        return []
+    try:
+        res = (
+            supabase_client.table("desconocidos")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/desconocidos/{id}/aprobar")
+async def aprobar_desconocido(id: int, nombre: str = Form(...)):
+    """Aprueba un rostro desconocido: le asigna nombre y lo registra como persona conocida.
+    El sistema descargara la foto y generara el encoding automaticamente."""
+    if not supabase_client:
+        return {"error": "Supabase no conectado"}
+    if not FR_DISPONIBLE:
+        return {"error": "face_recognition no disponible"}
+    try:
+        import face_recognition as fr
+        import urllib.request
+
+        # Obtener el registro
+        row = supabase_client.table("desconocidos").select("*").eq("id", id).single().execute()
+        if not row.data:
+            return {"error": "No encontrado"}
+        foto_url = row.data["foto_url"]
+
+        # Descargar foto y generar encoding
+        with urllib.request.urlopen(foto_url) as resp:
+            img_bytes = resp.read()
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return {"error": "No se pudo leer la imagen"}
+        rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        encs = fr.face_encodings(rgb)
+        if not encs:
+            return {"error": "No se detecto rostro en la imagen guardada"}
+
+        enc = encs[0].tolist()
+
+        # Registrar en tabla personas
+        supabase_client.table("personas").insert({
+            "nombre":   nombre,
+            "encoding": enc,
+            "foto_url": foto_url,
+        }).execute()
+
+        # Marcar como aprobado en tabla desconocidos
+        supabase_client.table("desconocidos").update({
+            "aprobado": True,
+            "nombre":   nombre,
+        }).eq("id", id).execute()
+
+        cargar_personas()
+        return {"ok": True, "nombre": nombre, "total_personas": len(personas_conocidas)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/desconocidos/{id}")
+def eliminar_desconocido(id: int):
+    """Elimina un rostro desconocido de la lista (descartar)."""
+    if not supabase_client:
+        return {"error": "Supabase no conectado"}
+    try:
+        supabase_client.table("desconocidos").delete().eq("id", id).execute()
+        return {"ok": True}
     except Exception as e:
         return {"error": str(e)}

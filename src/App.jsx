@@ -6,6 +6,7 @@ import Galeria from './pages/Galeria'
 import Placas from './pages/Placas'
 import Camaras from './pages/Camaras'
 import Personas from './pages/Personas'
+import Desconocidos from './pages/Desconocidos'
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -51,6 +52,7 @@ export default function App() {
             <Route path="placas" element={<Placas />} />
             <Route path="camaras" element={<Camaras />} />
             <Route path="personas" element={<Personas />} />
+            <Route path="desconocidos" element={<Desconocidos />} />
           </Route>
         </Routes>
       </BrowserRouter>

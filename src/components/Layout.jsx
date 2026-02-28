@@ -35,6 +35,15 @@ const IconPersonas = () => (
   </svg>
 )
 
+const IconDesconocidos = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006
+         3.907-.393.266-.78.566-1.126.87L11 15" />
+    <circle cx="12" cy="19" r="1" fill="currentColor" />
+  </svg>
+)
+
 const IconMenu = () => (
   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -53,16 +62,16 @@ const navLinks = [
   { to: '/placas', label: 'Placas', Icon: IconPlacas },
   { to: '/camaras', label: 'Cámaras', Icon: IconCamaras },
   { to: '/personas', label: 'Personas', Icon: IconPersonas },
+  { to: '/desconocidos', label: 'Desconocidos', Icon: IconDesconocidos },
 ]
 
 export default function Layout() {
   const [sidebarAbierto, setSidebarAbierto] = useState(false)
 
   const claseNavLink = ({ isActive }) =>
-    `flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-all duration-200 ${
-      isActive
-        ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
-        : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
+    `flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-all duration-200 ${isActive
+      ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
+      : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
     }`
 
   return (
@@ -155,8 +164,7 @@ export default function Layout() {
               to={to}
               end={end}
               className={({ isActive }) =>
-                `flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${
-                  isActive ? 'text-blue-400' : 'text-slate-500'
+                `flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${isActive ? 'text-blue-400' : 'text-slate-500'
                 }`
               }
             >
