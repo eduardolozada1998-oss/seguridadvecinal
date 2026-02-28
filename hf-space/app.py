@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import threading
 import os
 import re
+import base64
 import tempfile
 import traceback
 import email
@@ -27,6 +28,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 GMAIL_USER   = os.environ.get("GMAIL_USER", "")
 GMAIL_PASS   = os.environ.get("GMAIL_PASS", "")
 EMAIL_ALERTA = os.environ.get("EMAIL_ALERTA", GMAIL_USER)
+# Gmail API (reemplaza IMAP — HF bloquea puerto 993)
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
 # ---------------------------------------------------------------------------
 # Estado global (se inicializa en lifespan, no al importar)
@@ -100,13 +105,17 @@ def _inicializar_modelos():
     except Exception as e:
         print(f"Face recognition no disponible: {e}")
 
-    # Hilo IMAP
-    if GMAIL_USER and GMAIL_PASS:
+    # Hilo lector de emails (Gmail API > IMAP — HF bloquea IMAP)
+    if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN:
+        t = threading.Thread(target=_bucle_gmail, daemon=True, name="imap")
+        t.start()
+        print("Gmail API reader iniciado")
+    elif GMAIL_USER and GMAIL_PASS:
         t = threading.Thread(target=_bucle_emails, daemon=True, name="imap")
         t.start()
-        print("Lector IMAP iniciado")
+        print("IMAP iniciado (legacy — puede fallar en HF)")
     else:
-        print("WARN: GMAIL no configurado")
+        print("WARN: Gmail no configurado")
 
     print("Modelos listos")
 
@@ -527,12 +536,182 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
         traceback.print_exc()
 
 
-# Estado del bucle IMAP para diagnóstico
+# Estado del bucle de emails para diagnóstico
 _imap_estado = {"ok": False, "ultimo_check": None, "ultimo_error": None, "emails_procesados": 0}
 
 
 # ---------------------------------------------------------------------------
-# Bucle IMAP — mantiene conexion abierta, reconecta con backoff
+# Gmail API — reemplaza IMAP (HF bloquea puerto 993, API usa HTTPS 443)
+# ---------------------------------------------------------------------------
+def _get_gmail_service():
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    creds = Credentials(
+        token=None,
+        refresh_token=GOOGLE_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=["https://www.googleapis.com/auth/gmail.modify"],
+    )
+    return build("gmail", "v1", credentials=creds)
+
+
+def _marcar_leido_gmail(service, msg_id: str) -> None:
+    try:
+        service.users().messages().modify(
+            userId="me", id=msg_id,
+            body={"removeLabelIds": ["UNREAD"]}
+        ).execute()
+    except Exception as e:
+        print(f"Gmail marcar leido ERROR: {e}")
+
+
+def _procesar_mensaje_gmail(service, msg_id: str) -> None:
+    """Descarga mensaje completo via Gmail API y lo procesa igual que IMAP."""
+    try:
+        raw = service.users().messages().get(
+            userId="me", id=msg_id, format="raw"
+        ).execute()
+        raw_bytes = base64.urlsafe_b64decode(raw["raw"] + "==")
+        msg = email.message_from_bytes(raw_bytes)
+
+        asunto = msg.get("Subject", "")
+        if "ALERTA:" in asunto:
+            _marcar_leido_gmail(service, msg_id)
+            return
+
+        fecha_h = msg.get("Date")
+        if fecha_h:
+            try:
+                dt = parsedate_to_datetime(fecha_h)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - dt > timedelta(hours=24):
+                    _marcar_leido_gmail(service, msg_id)
+                    print(f"Email antiguo ignorado")
+                    return
+            except Exception:
+                pass
+
+        asunto_dec  = _decodificar(asunto)
+        camara_base = _numero_camara(asunto_dec)
+        print(f"Gmail: '{asunto_dec}' -> camara base={camara_base}")
+
+        # Leer camara desde cuerpo XML del DVR
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct in ("text/plain", "text/xml", "application/xml", "text/html"):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    try:
+                        cuerpo = payload.decode("utf-8", errors="replace")
+                        cam_cuerpo = _camara_desde_cuerpo(cuerpo)
+                        if cam_cuerpo:
+                            camara_base = cam_cuerpo
+                            print(f"Camara desde XML: {camara_base}")
+                            break
+                    except Exception:
+                        pass
+
+        fotos = 0
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            filename = _decodificar(part.get_filename() or "")
+            if not filename:
+                ct = part.get("Content-Type", "")
+                m  = re.search(r'name=["\']?([^";\']+)', ct)
+                if m:
+                    filename = _decodificar(m.group(1).strip())
+            fname_lower = filename.lower()
+            cam = _numero_camara(filename) if filename else camara_base
+            if cam == "01" and camara_base != "01":
+                cam = camara_base
+
+            if any(fname_lower.endswith(e) for e in [".jpg", ".jpeg", ".png"]):
+                data = part.get_payload(decode=True)
+                if not data:
+                    continue
+                fotos += 1
+                print(f"Imagen '{filename}' -> cam {cam} ({len(data)//1024} KB)")
+                threading.Thread(target=procesar_foto, args=(data, cam),
+                                 daemon=True, name=f"proc-{cam}").start()
+
+            elif any(fname_lower.endswith(e) for e in [".mov", ".mp4", ".avi", ".mkv"]):
+                data = part.get_payload(decode=True)
+                if not data:
+                    continue
+                print(f"Video '{filename}' -> cam {cam} ({len(data)//1024} KB)")
+                ext = fname_lower[-4:]
+                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                    tmp.write(data)
+                    tmp_path = tmp.name
+                try:
+                    cap   = cv2.VideoCapture(tmp_path)
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(total * 0.20)))
+                    ret, fr = cap.read()
+                    cap.release()
+                    if ret and fr is not None:
+                        ok, buf = cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        if ok:
+                            fotos += 1
+                            threading.Thread(target=procesar_foto, args=(buf.tobytes(), cam),
+                                             daemon=True, name=f"proc-{cam}").start()
+                except Exception as e:
+                    print(f"Video ERROR: {e}")
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+        _marcar_leido_gmail(service, msg_id)
+        _imap_estado["emails_procesados"] += 1
+        if fotos == 0:
+            print("Sin adjuntos de imagen/video en este email")
+
+    except Exception as e:
+        print(f"_procesar_mensaje_gmail ERROR: {e}")
+        traceback.print_exc()
+
+
+def _bucle_gmail() -> None:
+    """Polling Gmail API cada 30s. Usa HTTPS (puerto 443), funciona en HF."""
+    global _imap_estado
+    backoff = 30
+    while True:
+        try:
+            service = _get_gmail_service()
+            _imap_estado["ok"]          = True
+            _imap_estado["ultimo_error"] = None
+            backoff = 30
+            print("Gmail API conectado OK")
+            while True:
+                res  = service.users().messages().list(
+                    userId="me", q="is:unread in:inbox", maxResults=20
+                ).execute()
+                msgs = res.get("messages", [])
+                _imap_estado["ultimo_check"] = datetime.now(timezone.utc).isoformat()
+                if msgs:
+                    print(f"{len(msgs)} email(s) nuevo(s)")
+                    for m in msgs:
+                        _procesar_mensaje_gmail(service, m["id"])
+                else:
+                    print("Sin emails nuevos")
+                time.sleep(30)
+        except Exception as e:
+            _imap_estado["ok"]          = False
+            _imap_estado["ultimo_error"] = str(e)
+            print(f"Gmail API ERROR: {e} — reintento en {backoff}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+
+
+# ---------------------------------------------------------------------------
+# Bucle IMAP legacy — mantiene conexion abierta, reconecta con backoff
+# (solo se usa si no hay credenciales Gmail API configuradas)
 # ---------------------------------------------------------------------------
 def _bucle_emails() -> None:
     global _imap_estado
@@ -686,7 +865,7 @@ def debug():
             "supabase": supabase_client is not None,
         },
         "imap": _imap_estado,
-        "gmail_configurado": bool(GMAIL_USER and GMAIL_PASS),
+        "gmail_api_configurada": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN),
         "gmail_user": GMAIL_USER[:4] + "****" if GMAIL_USER else None,
         "personas_cargadas": len(personas_conocidas),
         "hilos_activos": hilos,
@@ -697,31 +876,30 @@ def debug():
 
 @app.post("/forzar-emails")
 def forzar_emails():
-    """Lee todos los emails no leidos del inbox ignorando limite de tiempo y los procesa."""
-    if not GMAIL_USER or not GMAIL_PASS:
-        return {"error": "Gmail no configurado"}
+    """Fuerza procesado de todos los emails no leidos via Gmail API."""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_REFRESH_TOKEN:
+        return {"error": "Gmail API no configurada. Agrega GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET y GOOGLE_REFRESH_TOKEN en los Secrets del HF Space."}
     resultados = []
     try:
-        with imaplib.IMAP4_SSL("imap.gmail.com") as mail:
-            mail.login(GMAIL_USER, GMAIL_PASS)
-            mail.select("INBOX")
-            # Buscar TODOS los no leidos
-            _, nums = mail.search(None, "UNSEEN")
-            ids = nums[0].split() if nums[0] else []
-            resultados.append(f"Emails no leidos encontrados: {len(ids)}")
-            for num in ids:
-                try:
-                    _, msg_data = mail.fetch(num, "(RFC822)")
-                    if not msg_data or not msg_data[0]:
-                        continue
-                    msg    = email.message_from_bytes(msg_data[0][1])
-                    asunto = _decodificar(msg.get("Subject", ""))
-                    fecha  = msg.get("Date", "")
-                    resultados.append(f"Email: '{asunto}' | {fecha}")
-                    # Procesar sin limite de tiempo — llamar directo sin el filtro
-                    _procesar_email_forzado(mail, num, msg)
-                except Exception as e:
-                    resultados.append(f"Error en email: {e}")
+        service = _get_gmail_service()
+        res  = service.users().messages().list(
+            userId="me", q="is:unread in:inbox", maxResults=20
+        ).execute()
+        msgs = res.get("messages", [])
+        resultados.append(f"Emails no leidos encontrados: {len(msgs)}")
+        for m in msgs:
+            try:
+                raw = service.users().messages().get(
+                    userId="me", id=m["id"], format="raw"
+                ).execute()
+                raw_bytes = base64.urlsafe_b64decode(raw["raw"] + "==")
+                msg    = email.message_from_bytes(raw_bytes)
+                asunto = _decodificar(msg.get("Subject", ""))
+                fecha  = msg.get("Date", "")
+                resultados.append(f"Email: '{asunto}' | {fecha}")
+                _procesar_mensaje_gmail(service, m["id"])
+            except Exception as e:
+                resultados.append(f"Error en email {m['id']}: {e}")
     except Exception as e:
         return {"error": str(e), "log": resultados}
     return {"ok": True, "log": resultados}
