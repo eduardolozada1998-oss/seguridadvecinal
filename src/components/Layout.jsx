@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+
+const HF_URL = import.meta.env.VITE_HF_API_URL || ''
 
 // Iconos SVG inline para no depender de librerías externas
 const IconDashboard = () => (
@@ -44,6 +46,24 @@ const IconDesconocidos = () => (
   </svg>
 )
 
+const IconAlerta = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002
+         6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388
+         6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0
+         11-6 0v-1m6 0H9" />
+  </svg>
+)
+
+const IconEvidencia = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1
+         1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+  </svg>
+)
+
 const IconMenu = () => (
   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -58,15 +78,31 @@ const IconShield = () => (
 
 const navLinks = [
   { to: '/', label: 'Dashboard', Icon: IconDashboard, end: true },
+  { to: '/alertas', label: 'Alertas', Icon: IconAlerta },
   { to: '/galeria', label: 'Galería', Icon: IconGaleria },
   { to: '/placas', label: 'Placas', Icon: IconPlacas },
   { to: '/camaras', label: 'Cámaras', Icon: IconCamaras },
   { to: '/personas', label: 'Personas', Icon: IconPersonas },
   { to: '/desconocidos', label: 'Desconocidos', Icon: IconDesconocidos },
+  { to: '/evidencia', label: 'Evidencia', Icon: IconEvidencia },
 ]
 
 export default function Layout() {
   const [sidebarAbierto, setSidebarAbierto] = useState(false)
+  const [alertasPendientes, setAlertasPendientes] = useState(0)
+
+  // Polling de alertas pendientes cada 30 segundos para el badge
+  useEffect(() => {
+    if (!HF_URL) return
+    const fetchPending = () =>
+      fetch(`${HF_URL}/alerts/stats`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d?.pending != null) setAlertasPendientes(d.pending) })
+        .catch(() => {})
+    fetchPending()
+    const id = setInterval(fetchPending, 30000)
+    return () => clearInterval(id)
+  }, [])
 
   const claseNavLink = ({ isActive }) =>
     `flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-all duration-200 ${isActive
@@ -115,7 +151,13 @@ export default function Layout() {
               onClick={() => setSidebarAbierto(false)}
             >
               <Icon />
-              <span>{label}</span>
+              <span className="flex-1">{label}</span>
+              {to === '/alertas' && alertasPendientes > 0 && (
+                <span className="bg-red-500 text-white text-xs font-bold rounded-full
+                  px-1.5 py-0.5 min-w-[20px] text-center leading-none">
+                  {alertasPendientes > 99 ? '99+' : alertasPendientes}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

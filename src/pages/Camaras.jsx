@@ -47,23 +47,23 @@ export default function Camaras() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
         {cargando
           ? Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden animate-pulse">
-                <div className="aspect-video bg-slate-700" />
-                <div className="p-5 space-y-3">
-                  <div className="h-5 bg-slate-700 rounded w-1/3" />
-                  <div className="h-3 bg-slate-700 rounded w-2/3" />
-                  <div className="h-3 bg-slate-700 rounded w-1/2" />
-                  <div className="h-9 bg-slate-700 rounded" />
-                </div>
+            <div key={i} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden animate-pulse">
+              <div className="aspect-video bg-slate-700" />
+              <div className="p-5 space-y-3">
+                <div className="h-5 bg-slate-700 rounded w-1/3" />
+                <div className="h-3 bg-slate-700 rounded w-2/3" />
+                <div className="h-3 bg-slate-700 rounded w-1/2" />
+                <div className="h-9 bg-slate-700 rounded" />
               </div>
-            ))
+            </div>
+          ))
           : camaras.map((camara) => (
-              <CamaraCard
-                key={camara.id}
-                camara={camara}
-                onVerGaleria={() => irAGaleria(camara.id)}
-              />
-            ))}
+            <CamaraCard
+              key={camara.id}
+              camara={camara}
+              onVerGaleria={() => irAGaleria(camara.id)}
+            />
+          ))}
       </div>
 
       {/* Leyenda */}
@@ -90,9 +90,8 @@ function CamaraCard({ camara, onVerGaleria }) {
 
   return (
     <div
-      className={`bg-slate-800 border rounded-xl overflow-hidden hover:shadow-lg hover:shadow-black/30 transition-all duration-300 ${
-        activa ? 'border-green-500/30 hover:border-green-500/50' : 'border-slate-700 hover:border-slate-600'
-      }`}
+      className={`bg-slate-800 border rounded-xl overflow-hidden hover:shadow-lg hover:shadow-black/30 transition-all duration-300 ${activa ? 'border-green-500/30 hover:border-green-500/50' : 'border-slate-700 hover:border-slate-600'
+        }`}
     >
       {/* Foto última captura */}
       <div className="relative aspect-video bg-slate-900">
@@ -115,11 +114,10 @@ function CamaraCard({ camara, onVerGaleria }) {
 
         {/* Badge estado */}
         <div className="absolute top-3 right-3">
-          <span className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full ${
-            activa
+          <span className={`flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full ${activa
               ? 'bg-green-500/90 text-white'
               : 'bg-slate-700/90 text-slate-400'
-          }`}>
+            }`}>
             <span className={`w-1.5 h-1.5 rounded-full ${activa ? 'bg-white animate-pulse' : 'bg-slate-500'}`} />
             {activa ? 'ACTIVA' : 'INACTIVA'}
           </span>

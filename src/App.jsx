@@ -7,6 +7,8 @@ import Placas from './pages/Placas'
 import Camaras from './pages/Camaras'
 import Personas from './pages/Personas'
 import Desconocidos from './pages/Desconocidos'
+import AlertDashboard from './pages/AlertDashboard'
+import EvidenceViewer from './pages/EvidenceViewer'
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -53,6 +55,8 @@ export default function App() {
             <Route path="camaras" element={<Camaras />} />
             <Route path="personas" element={<Personas />} />
             <Route path="desconocidos" element={<Desconocidos />} />
+            <Route path="alertas" element={<AlertDashboard />} />
+            <Route path="evidencia" element={<EvidenceViewer />} />
           </Route>
         </Routes>
       </BrowserRouter>

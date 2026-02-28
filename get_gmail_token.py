@@ -15,8 +15,8 @@ Pasos previos:
 Copia los 3 valores que se imprimen y agregalos en HF Space > Settings > Variables and secrets.
 """
 
-CLIENT_ID     = "PEGA_AQUI_TU_CLIENT_ID"
-CLIENT_SECRET = "PEGA_AQUI_TU_CLIENT_SECRET"
+CLIENT_ID     = "TU_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+CLIENT_SECRET = "TU_GOOGLE_CLIENT_SECRET"
 
 # -----------------------------------------------------------------------
 import json, webbrowser, urllib.parse, urllib.request, http.server, threading
