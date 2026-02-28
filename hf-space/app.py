@@ -166,6 +166,26 @@ def _numero_camara(texto: str) -> str:
     return m.group(1).zfill(2) if m else "01"
 
 
+def _camara_desde_cuerpo(texto: str):
+    """Extrae numero de camara del cuerpo XML/texto del DVR Meriva.
+    Busca <Input1>3</Input1> o 'Fuente alarma : Cámara3'.
+    Devuelve '01'-'08' o None si no encuentra."""
+    if not texto:
+        return None
+    # XML del DVR: <Input1>3</Input1>
+    m = re.search(r'<Input1>(\d+)</Input1>', texto)
+    if m:
+        return m.group(1).zfill(2)
+    # Texto plano: "Fuente alarma : Cámara3"
+    norm = texto
+    for src, dst in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u")]:
+        norm = norm.replace(src, dst)
+    m = re.search(r'Fuente alarma\s*:\s*[Cc]amara\s*(\d)', norm)
+    if m:
+        return m.group(1).zfill(2)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Zona horaria y helpers
 # ---------------------------------------------------------------------------
@@ -417,6 +437,22 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
         asunto_dec = _decodificar(asunto)
         camara_base = _numero_camara(asunto_dec)
         print(f"Email: '{asunto_dec}' -> camara base={camara_base}")
+
+        # Refinar camara leyendo el cuerpo del email (XML/texto del DVR Meriva)
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct in ('text/plain', 'text/xml', 'application/xml', 'text/html'):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    try:
+                        cuerpo = payload.decode('utf-8', errors='replace')
+                        cam_cuerpo = _camara_desde_cuerpo(cuerpo)
+                        if cam_cuerpo:
+                            camara_base = cam_cuerpo
+                            print(f"Camara desde cuerpo XML: {camara_base}")
+                            break
+                    except Exception:
+                        pass
 
         fotos = 0
         for part in msg.walk():
