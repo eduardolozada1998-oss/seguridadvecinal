@@ -285,7 +285,7 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
             for r in results:
                 for box in r.boxes:
                     cls = int(box.cls[0])
-                    if float(box.conf[0]) < 0.5:
+                    if float(box.conf[0]) < 0.3:
                         continue
                     if cls == 0:
                         tipo = "persona"
@@ -318,8 +318,10 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
             print(f"Rostros: {n_rostros} — cam {camara_id}")
 
         if tipo is None:
-            print(f"Cam {camara_id}: sin deteccion relevante")
-            return
+            # Fallback: guardar igual como movimiento (la alarma ya fue disparada por el DVR)
+            tipo  = "movimiento"
+            valor = ""
+            print(f"Cam {camara_id}: sin deteccion YOLO — guardando como movimiento")
 
         # Codificar imagen anotada
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
