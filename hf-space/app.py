@@ -43,6 +43,13 @@ face_cascade       = None
 FR_DISPONIBLE      = False
 personas_conocidas: list = []   # [{nombre: str, encoding: np.ndarray}]
 
+# Cooldown: evita guardar el mismo tipo de evento en la misma camara repetidamente
+# clave: "cam-tipo" -> datetime del ultimo evento guardado
+_ultimo_evento: dict = {}
+COOLDOWN_VEHICULO  = int(os.environ.get("COOLDOWN_VEHICULO",  "10"))  # minutos entre vehiculos
+COOLDOWN_MOVIMIENTO = int(os.environ.get("COOLDOWN_MOVIMIENTO", "5"))   # minutos entre movimientos
+COOLDOWN_PERSONA   = int(os.environ.get("COOLDOWN_PERSONA",   "2"))   # minutos entre personas
+
 # ---------------------------------------------------------------------------
 # Lifespan — inicializacion segura
 # ---------------------------------------------------------------------------
@@ -419,6 +426,18 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
         ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         nombre_arch = f"{camara_id}_{ts}.jpg"
         foto_url    = ""
+
+        # --- Cooldown: no guardar si ya se guardo el mismo tipo recientemente en esta camara ---
+        cooldown_mins = {"vehiculo": COOLDOWN_VEHICULO, "movimiento": COOLDOWN_MOVIMIENTO, "persona": COOLDOWN_PERSONA}.get(tipo, 2)
+        clave_cd = f"{camara_id}-{tipo}"
+        ahora    = datetime.now(timezone.utc)
+        ultimo   = _ultimo_evento.get(clave_cd)
+        if ultimo and (ahora - ultimo).total_seconds() < cooldown_mins * 60:
+            restante = int(cooldown_mins * 60 - (ahora - ultimo).total_seconds())
+            print(f"Cam {camara_id}: cooldown {tipo} — ignorado ({restante}s restantes)")
+            return
+        _ultimo_evento[clave_cd] = ahora
+        # ---------------------------------------------------------------------------------
 
         if supabase_client:
             try:
