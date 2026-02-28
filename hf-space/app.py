@@ -46,8 +46,8 @@ personas_conocidas: list = []   # [{nombre: str, encoding: np.ndarray}]
 # Cooldown: evita guardar el mismo tipo de evento en la misma camara repetidamente
 # clave: "cam-tipo" -> datetime del ultimo evento guardado
 _ultimo_evento: dict = {}
-COOLDOWN_VEHICULO  = int(os.environ.get("COOLDOWN_VEHICULO",  "10"))  # minutos entre vehiculos
-COOLDOWN_MOVIMIENTO = int(os.environ.get("COOLDOWN_MOVIMIENTO", "5"))   # minutos entre movimientos
+COOLDOWN_VEHICULO  = int(os.environ.get("COOLDOWN_VEHICULO",  "60"))  # minutos entre vehiculos (1h — carros estacionados)
+COOLDOWN_MOVIMIENTO = int(os.environ.get("COOLDOWN_MOVIMIENTO", "10"))  # minutos entre movimientos
 COOLDOWN_PERSONA   = int(os.environ.get("COOLDOWN_PERSONA",   "2"))   # minutos entre personas
 
 # ---------------------------------------------------------------------------
