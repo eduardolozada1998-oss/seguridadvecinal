@@ -426,7 +426,7 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                 dt = parsedate_to_datetime(fecha_h)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - dt > timedelta(hours=2):
+                if datetime.now(timezone.utc) - dt > timedelta(hours=24):
                     mail.store(num, "+FLAGS", "\\Seen")
                     print(f"Email antiguo ignorado")
                     return
