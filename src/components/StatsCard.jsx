@@ -20,34 +20,34 @@ export default function StatsCard({ titulo, valor, icono, color = 'blue', subtit
 
   if (cargando) {
     return (
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 animate-pulse">
+      <div className="bg-slate-800 border border-slate-700 rounded-xl p-3 sm:p-5 animate-pulse">
         <div className="flex items-start justify-between">
           <div className="space-y-2">
-            <div className="h-3 bg-slate-700 rounded w-24" />
-            <div className="h-8 bg-slate-700 rounded w-16" />
+            <div className="h-3 bg-slate-700 rounded w-20" />
+            <div className="h-7 bg-slate-700 rounded w-12" />
           </div>
-          <div className="w-10 h-10 bg-slate-700 rounded-lg" />
+          <div className="w-8 h-8 sm:w-10 sm:h-10 bg-slate-700 rounded-lg" />
         </div>
-        <div className="h-3 bg-slate-700 rounded w-32 mt-3" />
+        <div className="h-2.5 bg-slate-700 rounded w-24 mt-2.5" />
       </div>
     )
   }
 
   return (
-    <div className={`bg-slate-800 border rounded-xl p-5 hover:shadow-lg transition-all duration-300 ${colores[color]}`}>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-slate-400 text-xs font-medium uppercase tracking-wider">{titulo}</p>
-          <p className={`text-3xl font-bold mt-1 ${coloresTexto[color]}`}>{valor ?? '—'}</p>
+    <div className={`bg-slate-800 border rounded-xl p-3 sm:p-5 hover:shadow-lg transition-all duration-300 ${colores[color]}`}>
+      <div className="flex items-start justify-between gap-1">
+        <div className="min-w-0">
+          <p className="text-slate-400 text-[10px] sm:text-xs font-medium uppercase tracking-wider truncate">{titulo}</p>
+          <p className={`text-2xl sm:text-3xl font-bold mt-0.5 sm:mt-1 ${coloresTexto[color]}`}>{valor ?? '—'}</p>
         </div>
         {icono && (
-          <div className={`text-2xl p-2 rounded-lg bg-slate-700/50`}>
+          <div className="text-xl sm:text-2xl p-1.5 sm:p-2 rounded-lg bg-slate-700/50 flex-shrink-0">
             {icono}
           </div>
         )}
       </div>
       {subtitulo && (
-        <p className="text-slate-500 text-xs mt-2">{subtitulo}</p>
+        <p className="text-slate-500 text-[10px] sm:text-xs mt-1.5 sm:mt-2 truncate">{subtitulo}</p>
       )}
     </div>
   )

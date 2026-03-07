@@ -87,6 +87,14 @@ const navLinks = [
   { to: '/evidencia', label: 'Evidencia', Icon: IconEvidencia },
 ]
 
+// Solo estos 4 aparecen en el bottom nav móvil; el resto en el sidebar ("Más")
+const bottomNavLinks = [
+  { to: '/', label: 'Inicio', Icon: IconDashboard, end: true },
+  { to: '/alertas', label: 'Alertas', Icon: IconAlerta },
+  { to: '/galeria', label: 'Galería', Icon: IconGaleria },
+  { to: '/camaras', label: 'Cámaras', Icon: IconCamaras },
+]
+
 export default function Layout() {
   const [sidebarAbierto, setSidebarAbierto] = useState(false)
   const [alertasPendientes, setAlertasPendientes] = useState(0)
@@ -198,22 +206,48 @@ export default function Layout() {
       </div>
 
       {/* ──── BOTTOM NAV móvil ──── */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 z-10">
-        <div className="flex">
-          {navLinks.map(({ to, label, Icon, end }) => (
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-slate-800/95 backdrop-blur border-t border-slate-700 z-10">
+        <div className="flex items-stretch">
+          {bottomNavLinks.map(({ to, label, Icon, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
               className={({ isActive }) =>
-                `flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${isActive ? 'text-blue-400' : 'text-slate-500'
-                }`
+                `flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-medium transition-colors relative
+                ${isActive ? 'text-blue-400' : 'text-slate-500 active:text-slate-300'}`
               }
             >
-              <Icon />
-              <span>{label}</span>
+              {({ isActive }) => (
+                <>
+                  <div className="relative">
+                    <Icon />
+                    {to === '/alertas' && alertasPendientes > 0 && (
+                      <span className="absolute -top-1.5 -right-2 bg-red-500 text-white text-[9px] font-bold rounded-full
+                        px-1 min-w-[16px] h-4 flex items-center justify-center leading-none">
+                        {alertasPendientes > 99 ? '99+' : alertasPendientes}
+                      </span>
+                    )}
+                  </div>
+                  <span>{label}</span>
+                  {isActive && (
+                    <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-400 rounded-full" />
+                  )}
+                </>
+              )}
             </NavLink>
           ))}
+
+          {/* Botón "Más" → abre el sidebar */}
+          <button
+            onClick={() => setSidebarAbierto(true)}
+            className="flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-medium text-slate-500 active:text-slate-300 transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
+            </svg>
+            <span>Más</span>
+          </button>
         </div>
       </nav>
     </div>

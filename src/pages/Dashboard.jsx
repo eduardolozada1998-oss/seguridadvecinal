@@ -54,17 +54,15 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="p-4 lg:p-6 space-y-6">
+    <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6">
       {/* ──── HEADER ──── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-2">
         <div>
-          <h2 className="text-2xl font-bold text-white">Dashboard</h2>
-          <p className="text-slate-400 text-sm capitalize">{formatFecha(horaActual)}</p>
+          <h2 className="text-xl sm:text-2xl font-bold text-white">Dashboard</h2>
+          <p className="text-slate-400 text-xs sm:text-sm capitalize">{formatFecha(horaActual)}</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-3xl font-mono font-bold text-blue-400">{formatHora(horaActual)}</p>
-          </div>
+        <div className="flex items-center gap-2 sm:gap-3">
+          <p className="text-2xl sm:text-3xl font-mono font-bold text-blue-400">{formatHora(horaActual)}</p>
           <button
             onClick={recargar}
             disabled={cargando}
@@ -79,7 +77,7 @@ export default function Dashboard() {
       </div>
 
       {/* ──── STATS DEL DÍA ──── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
         <StatsCard
           titulo="Total hoy"
           valor={stats.totalHoy}
@@ -115,30 +113,30 @@ export default function Dashboard() {
       </div>
 
       {/* ──── GRÁFICA DE BARRAS ──── */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5">
-        <h3 className="text-slate-200 font-semibold mb-4">Actividad por hora — últimas 24 horas</h3>
+      <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 sm:p-5">
+        <h3 className="text-slate-200 font-semibold mb-3 sm:mb-4 text-sm sm:text-base">Actividad por hora — últimas 24 h</h3>
         {cargando ? (
-          <div className="h-56 bg-slate-700 rounded animate-pulse" />
+          <div className="h-44 sm:h-56 bg-slate-700 rounded animate-pulse" />
         ) : grafica.length > 0 ? (
-          <ResponsiveContainer width="100%" height={224}>
-            <BarChart data={grafica} margin={{ top: 0, right: 10, left: -20, bottom: 0 }}>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={grafica} margin={{ top: 0, right: 4, left: -24, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
               <XAxis
                 dataKey="hora"
-                tick={{ fill: '#64748b', fontSize: 11 }}
+                tick={{ fill: '#64748b', fontSize: 10 }}
                 axisLine={{ stroke: '#334155' }}
                 tickLine={false}
-                interval={2}
+                interval={3}
               />
               <YAxis
-                tick={{ fill: '#64748b', fontSize: 11 }}
+                tick={{ fill: '#64748b', fontSize: 10 }}
                 axisLine={false}
                 tickLine={false}
                 allowDecimals={false}
               />
               <Tooltip content={<TooltipPersonalizado />} cursor={{ fill: 'rgba(148,163,184,0.05)' }} />
               <Legend
-                wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }}
+                wrapperStyle={{ fontSize: '11px', color: '#94a3b8' }}
                 formatter={(value) => value === 'personas' ? '🚶 Personas' : '🚗 Vehículos'}
               />
               <Bar dataKey="personas" stackId="a" fill="#3b82f6" radius={[0, 0, 0, 0]} name="personas" />
@@ -146,10 +144,10 @@ export default function Dashboard() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="h-56 flex items-center justify-center text-slate-500">
+          <div className="h-44 flex items-center justify-center text-slate-500">
             <div className="text-center">
-              <p className="text-4xl mb-2">📭</p>
-              <p>Sin actividad en las últimas 24 horas</p>
+              <p className="text-3xl mb-2">📭</p>
+              <p className="text-sm">Sin actividad en las últimas 24 horas</p>
             </div>
           </div>
         )}
@@ -157,9 +155,9 @@ export default function Dashboard() {
 
       {/* ──── ÚLTIMOS 6 EVENTOS ──── */}
       <div>
-        <h3 className="text-slate-200 font-semibold mb-4">Últimos eventos</h3>
+        <h3 className="text-slate-200 font-semibold mb-3 text-sm sm:text-base">Últimos eventos</h3>
         {cargando ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 sm:gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="animate-pulse bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
                 <div className="aspect-video bg-slate-700" />
@@ -171,13 +169,13 @@ export default function Dashboard() {
             ))}
           </div>
         ) : ultimosEventos.length === 0 ? (
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-10 text-center">
-            <p className="text-4xl mb-3">🛡️</p>
-            <p className="text-slate-300 font-medium">Sin eventos registrados</p>
-            <p className="text-slate-500 text-sm mt-1">El sistema está monitoreando activamente</p>
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center">
+            <p className="text-3xl mb-3">🛡️</p>
+            <p className="text-slate-300 font-medium text-sm">Sin eventos registrados</p>
+            <p className="text-slate-500 text-xs mt-1">El sistema está monitoreando activamente</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 sm:gap-4">
             {ultimosEventos.map(evento => (
               <EventoCard
                 key={evento.id}
@@ -198,9 +196,9 @@ export default function Dashboard() {
       )}
 
       {/* Indicador auto-refresh */}
-      <div className="flex items-center justify-end gap-2 text-slate-500 text-xs">
+      <div className="flex items-center justify-end gap-2 text-slate-500 text-xs pb-1">
         <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-        <span>Actualización automática cada 30 segundos</span>
+        <span>Actualización automática cada 30 s</span>
       </div>
     </div>
   )
