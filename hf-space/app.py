@@ -192,10 +192,11 @@ def _decodificar(raw: str) -> str:
         return raw.strip()
 
 
-def _numero_camara(texto: str) -> str:
-    """Extrae numero de camara de cualquier texto. Devuelve '01'-'08'."""
+def _numero_camara(texto: str) -> Optional[str]:
+    """Extrae numero de camara de cualquier texto.
+    Devuelve '01'-'08' si encuentra patron, None si no hay match."""
     if not texto:
-        return "01"
+        return None
     # Normalizar: quitar acentos, pasar a minusculas
     norm = texto.lower()
     for src, dst in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("\xe1","a")]:
@@ -205,7 +206,12 @@ def _numero_camara(texto: str) -> str:
         or re.search(r'camara\s*[_\-]?\s*0?(\d)', norm) \
         or re.search(r'camera\s*[_\-]?\s*0?(\d)', norm) \
         or re.search(r'cam\s*[_\-]?\s*0?(\d)', norm)
-    return m.group(1).zfill(2) if m else "01"
+    return m.group(1).zfill(2) if m else None
+
+
+def _numero_camara_fallback(texto: str) -> str:
+    """Como _numero_camara pero devuelve '01' si no encuentra (compatibilidad)."""
+    return _numero_camara(texto) or "01"
 
 
 def _camara_desde_cuerpo(texto: str):
@@ -950,7 +956,7 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
 
         # Detectar camara desde asunto — DECODIFICAR RFC2047 PRIMERO
         asunto_dec = _decodificar(asunto)
-        camara_base = _numero_camara(asunto_dec)
+        camara_base = _numero_camara_fallback(asunto_dec)
         print(f"Email: '{asunto_dec}' -> camara base={camara_base}")
 
         # Refinar camara leyendo el cuerpo del email (XML/texto del DVR Meriva)
@@ -983,10 +989,12 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
                     filename = _decodificar(m.group(1).strip())
 
             fname_lower = filename.lower()
-            # Precisar camara desde nombre del archivo si es posible
-            cam = _numero_camara(filename) if filename else camara_base
-            if cam == "01" and camara_base != "01":
-                cam = camara_base
+            # Precisar camara desde nombre del archivo SOLO si hay match real.
+            # Si el filename no contiene número de cámara, usar camara_base
+            # (evita que archivos sin patrón se asignen falsamente a CAM 01).
+            cam_de_archivo = _numero_camara(filename) if filename else None
+            cam = cam_de_archivo if cam_de_archivo else camara_base
+            print(f"  filename='{filename}' cam_archivo={cam_de_archivo} base={camara_base} -> cam={cam}")
 
             # Imagenes
             if any(fname_lower.endswith(e) for e in [".jpg", ".jpeg", ".png"]):
