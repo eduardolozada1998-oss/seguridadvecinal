@@ -799,6 +799,13 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
                                    razon, es_nueva, False, None))
 
         # ── 5. Subir imagen anotada a Storage ────────────────────────────────────
+        # Upscale si el DVR envió imagen pequeña (< 640px ancho)
+        h_fr, w_fr = frame.shape[:2]
+        if w_fr < 640:
+            scale  = 640 / w_fr
+            frame  = cv2.resize(frame, (640, int(h_fr * scale)),
+                                interpolation=cv2.INTER_LANCZOS4)
+
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             return
