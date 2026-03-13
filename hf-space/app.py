@@ -64,6 +64,11 @@ _sessions_lock   = threading.Lock()
 # Cooldown legacy para vehiculos/movimiento sin rostro
 _ultimo_evento: dict = {}
 
+# Rate limiter de alertas: evita inundar el correo con ráfagas del DVR
+MINUTOS_ENTRE_ALERTAS = int(os.environ.get("MINUTOS_ENTRE_ALERTAS", "5"))
+_ultimo_envio_alerta: dict = {}   # camara_id → último datetime enviado
+_lock_alertas = threading.Lock()
+
 # ---------------------------------------------------------------------------
 # Lifespan — inicializacion segura
 # ---------------------------------------------------------------------------
@@ -882,6 +887,19 @@ def procesar_foto(img_bytes: bytes, camara_id: str) -> None:
 def _enviar_alerta(foto: bytes, tipo: str, valor: str, camara: str) -> None:
     if not GMAIL_USER or not GMAIL_PASS or not EMAIL_ALERTA:
         return
+    # Solo enviar alertas en horario nocturno (22:00-06:00)
+    if not _es_horario_nocturno():
+        print(f"Alerta omitida (horario diurno) — cam={camara} tipo={tipo}")
+        return
+    # Rate limiter: máx 1 alerta por cámara cada MINUTOS_ENTRE_ALERTAS
+    ahora = datetime.now(timezone.utc)
+    with _lock_alertas:
+        ultimo = _ultimo_envio_alerta.get(camara)
+        if ultimo and (ahora - ultimo) < timedelta(minutes=MINUTOS_ENTRE_ALERTAS):
+            seg = int((timedelta(minutes=MINUTOS_ENTRE_ALERTAS) - (ahora - ultimo)).total_seconds())
+            print(f"Alerta suprimida (cam {camara} ya notificada; próxima en {seg}s)")
+            return
+        _ultimo_envio_alerta[camara] = ahora
     try:
         msg = MIMEMultipart()
         msg["Subject"] = f"ALERTA: {tipo.upper()} detectado — Camara {camara}" + (f" | {valor}" if valor else "")
@@ -903,6 +921,20 @@ def _enviar_alerta_sospechoso(recorte: bytes, camara: str) -> None:
     """Envia email con recorte de cara desconocida detectada en horario nocturno."""
     if not GMAIL_USER or not GMAIL_PASS or not EMAIL_ALERTA:
         return
+    # Solo enviar en horario nocturno (ya es la intención de esta función)
+    if not _es_horario_nocturno():
+        print(f"Alerta sospechoso omitida (horario diurno) — cam={camara}")
+        return
+    # Rate limiter compartido: usa clave especial para no mezclar con _enviar_alerta
+    ahora = datetime.now(timezone.utc)
+    clave = f"{camara}_sospechoso"
+    with _lock_alertas:
+        ultimo = _ultimo_envio_alerta.get(clave)
+        if ultimo and (ahora - ultimo) < timedelta(minutes=MINUTOS_ENTRE_ALERTAS):
+            seg = int((timedelta(minutes=MINUTOS_ENTRE_ALERTAS) - (ahora - ultimo)).total_seconds())
+            print(f"Alerta sospechoso suprimida (cam {camara}; próxima en {seg}s)")
+            return
+        _ultimo_envio_alerta[clave] = ahora
     try:
         msg = MIMEMultipart()
         msg["Subject"] = f"SOSPECHOSO detectado — Camara {camara}"

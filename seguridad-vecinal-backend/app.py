@@ -84,6 +84,14 @@ yolo_input_name  = None
 # Serializa inferencia entre hilos (onnxruntime no es 100% thread-safe en CPU)
 _modelo_lock = threading.Lock()
 
+# ─────────────────────────────────────────────
+#  Rate limiter de alertas por email
+#  Evita inundar el correo cuando el DVR envía ráfagas de fotos
+# ─────────────────────────────────────────────
+MINUTOS_ENTRE_ALERTAS = int(os.environ.get("MINUTOS_ENTRE_ALERTAS", "5"))
+_ultimo_envio_alerta: dict[str, datetime] = {}   # camara_id → último datetime enviado
+_lock_alertas = threading.Lock()
+
 
 # ─────────────────────────────────────────────
 #  Helper descarga
@@ -551,6 +559,19 @@ def enviar_alerta(
     if not GMAIL_USER or not GMAIL_PASS or not EMAIL_ALERTA:
         print("⚠️  Credenciales de Gmail no configuradas — alerta no enviada")
         return
+
+    # ── Rate limiter: máx 1 alerta por cámara cada MINUTOS_ENTRE_ALERTAS ──
+    ahora = datetime.now(timezone.utc)
+    with _lock_alertas:
+        ultimo = _ultimo_envio_alerta.get(camara_id)
+        if ultimo and (ahora - ultimo) < timedelta(minutes=MINUTOS_ENTRE_ALERTAS):
+            seg_restantes = int((timedelta(minutes=MINUTOS_ENTRE_ALERTAS) - (ahora - ultimo)).total_seconds())
+            print(
+                f"⏸️  Alerta suprimida (cámara {camara_id} ya notificada; "
+                f"próxima en {seg_restantes}s) — tipo={tipo}"
+            )
+            return
+        _ultimo_envio_alerta[camara_id] = ahora
 
     try:
         msg             = MIMEMultipart()
