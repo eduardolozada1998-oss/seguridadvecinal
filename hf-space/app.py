@@ -972,14 +972,14 @@ def _procesar_email(mail: imaplib.IMAP4_SSL, num: bytes) -> None:
             mail.store(num, "+FLAGS", "\\Seen")
             return
 
-        # Ignorar emails mas antiguos de 2 horas
+        # Ignorar emails mas antiguos de 30 minutos
         fecha_h = msg.get("Date")
         if fecha_h:
             try:
                 dt = parsedate_to_datetime(fecha_h)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - dt > timedelta(hours=24):
+                if datetime.now(timezone.utc) - dt > timedelta(minutes=30):
                     mail.store(num, "+FLAGS", "\\Seen")
                     print(f"Email antiguo ignorado")
                     return
@@ -1133,7 +1133,7 @@ def _procesar_mensaje_gmail(service, msg_id: str) -> None:
                 dt = parsedate_to_datetime(fecha_h)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - dt > timedelta(hours=24):
+                if datetime.now(timezone.utc) - dt > timedelta(minutes=30):
                     _marcar_leido_gmail(service, msg_id)
                     print(f"Email antiguo ignorado")
                     return
